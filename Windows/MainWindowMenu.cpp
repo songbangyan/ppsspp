@@ -19,8 +19,8 @@
 #include "Common/System/Request.h"
 #include "Common/File/FileUtil.h"
 #include "Common/Log.h"
-#include "Common/LogManager.h"
-#include "Common/ConsoleListener.h"
+#include "Common/Log/LogManager.h"
+#include "Common/Log/ConsoleListener.h"
 #include "Common/OSVersion.h"
 #include "Common/GPU/Vulkan/VulkanLoader.h"
 #include "Common/StringUtils.h"
@@ -49,9 +49,14 @@
 #include "Windows/W32Util/DarkMode.h"
 
 #include "Core/HLE/sceUmd.h"
+#include "Core/HLE/sceNet.h"
 #include "Core/SaveState.h"
 #include "Core/Core.h"
 #include "Core/RetroAchievements.h"
+
+#ifdef RC_CLIENT_SUPPORTS_RAINTEGRATION
+#include "ext/rcheevos/include/rc_client_raintegration.h"
+#endif
 
 extern bool g_TakeScreenshot;
 
@@ -81,11 +86,18 @@ namespace MainWindow {
 			}
 		}
 
-		UINT menuEnable = menuEnableBool ? MF_ENABLED : MF_GRAYED;
-		UINT loadStateEnable = loadStateEnableBool ? MF_ENABLED : MF_GRAYED;
-		UINT saveStateEnable = saveStateEnableBool ? MF_ENABLED : MF_GRAYED;
-		UINT menuInGameEnable = state == UISTATE_INGAME ? MF_ENABLED : MF_GRAYED;
-		UINT umdSwitchEnable = state == UISTATE_INGAME && getUMDReplacePermit() ? MF_ENABLED : MF_GRAYED;
+		if (!NetworkAllowSaveState()) {
+			loadStateEnableBool = false;
+			saveStateEnableBool = false;
+		}
+
+		const UINT menuEnable = menuEnableBool ? MF_ENABLED : MF_GRAYED;
+		const UINT loadStateEnable = loadStateEnableBool ? MF_ENABLED : MF_GRAYED;
+		const UINT saveStateEnable = saveStateEnableBool ? MF_ENABLED : MF_GRAYED;
+		const UINT menuInGameEnable = state == UISTATE_INGAME ? MF_ENABLED : MF_GRAYED;
+		const UINT umdSwitchEnable = state == UISTATE_INGAME && getUMDReplacePermit() ? MF_ENABLED : MF_GRAYED;
+		const UINT debugEnable = !Achievements::HardcoreModeActive() ? MF_ENABLED : MF_GRAYED;
+		const UINT debugIngameEnable = (state == UISTATE_INGAME && !Achievements::HardcoreModeActive()) ? MF_ENABLED : MF_GRAYED;
 
 		EnableMenuItem(menu, ID_FILE_SAVESTATE_SLOT_MENU, saveStateEnable);
 		EnableMenuItem(menu, ID_FILE_SAVESTATEFILE, saveStateEnable);
@@ -97,16 +109,18 @@ namespace MainWindow {
 		EnableMenuItem(menu, ID_EMULATION_RESET, menuEnable);
 		EnableMenuItem(menu, ID_EMULATION_SWITCH_UMD, umdSwitchEnable);
 		EnableMenuItem(menu, ID_EMULATION_CHAT, g_Config.bEnableNetworkChat ? menuInGameEnable : MF_GRAYED);
-		EnableMenuItem(menu, ID_TOGGLE_BREAK, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_LOADMAPFILE, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_SAVEMAPFILE, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_LOADSYMFILE, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_SAVESYMFILE, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_RESETSYMBOLTABLE, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_TAKESCREENSHOT, menuEnable);
-		EnableMenuItem(menu, ID_DEBUG_SHOWDEBUGSTATISTICS, menuInGameEnable);
+		EnableMenuItem(menu, ID_TOGGLE_BREAK, debugIngameEnable);
+		EnableMenuItem(menu, ID_DEBUG_LOADMAPFILE, debugIngameEnable);
+		EnableMenuItem(menu, ID_DEBUG_SAVEMAPFILE, debugIngameEnable);
+		EnableMenuItem(menu, ID_DEBUG_LOADSYMFILE, debugIngameEnable);
+		EnableMenuItem(menu, ID_DEBUG_SAVESYMFILE, debugIngameEnable);
+		EnableMenuItem(menu, ID_DEBUG_RESETSYMBOLTABLE, debugIngameEnable);
+		EnableMenuItem(menu, ID_DEBUG_SHOWDEBUGSTATISTICS, debugEnable);
 		EnableMenuItem(menu, ID_DEBUG_EXTRACTFILE, menuEnable);
 		EnableMenuItem(menu, ID_DEBUG_MEMORYBASE, menuInGameEnable);
+		EnableMenuItem(menu, ID_DEBUG_DISASSEMBLY, debugEnable);
+		EnableMenuItem(menu, ID_DEBUG_MEMORYVIEW, debugEnable);
+		EnableMenuItem(menu, ID_DEBUG_GEDEBUGGER, debugEnable);
 
 		// While playing, this pop up doesn't work - and probably doesn't make sense.
 		EnableMenuItem(menu, ID_OPTIONS_LANGUAGE, state == UISTATE_INGAME ? MF_GRAYED : MF_ENABLED);
@@ -233,6 +247,7 @@ namespace MainWindow {
 		TranslateMenuItem(menu, ID_DEBUG_TAKESCREENSHOT, g_Config.bSystemControls ? L"\tF12" : L"");
 		TranslateMenuItem(menu, ID_DEBUG_DUMPNEXTFRAME);
 		TranslateMenuItem(menu, ID_DEBUG_SHOWDEBUGSTATISTICS);
+		TranslateMenuItem(menu, ID_DEBUG_RESTARTGRAPHICS);
 		TranslateMenuItem(menu, ID_DEBUG_DISASSEMBLY, g_Config.bSystemControls ? L"\tCtrl+D" : L"");
 		TranslateMenuItem(menu, ID_DEBUG_GEDEBUGGER, g_Config.bSystemControls ? L"\tCtrl+G" : L"");
 		TranslateMenuItem(menu, ID_DEBUG_EXTRACTFILE);
@@ -283,6 +298,7 @@ namespace MainWindow {
 		TranslateMenuItem(menu, ID_OPTIONS_NEARESTFILTERING);
 		TranslateMenuItem(menu, ID_OPTIONS_LINEARFILTERING);
 		TranslateMenuItem(menu, ID_OPTIONS_AUTOMAXQUALITYFILTERING);
+		TranslateMenuItem(menu, ID_OPTIONS_SMART2DTEXTUREFILTERING);
 		TranslateMenuItem(menu, ID_OPTIONS_SCREENFILTER_MENU);
 		TranslateMenuItem(menu, ID_OPTIONS_BUFLINEARFILTER);
 		TranslateMenuItem(menu, ID_OPTIONS_BUFNEARESTFILTER);
@@ -320,23 +336,23 @@ namespace MainWindow {
 
 	void BrowseAndBootDone(std::string filename);
 
-	void BrowseAndBoot(std::string defaultPath, bool browseDirectory) {
+	void BrowseAndBoot(RequesterToken token, std::string defaultPath, bool browseDirectory) {
 		browsePauseAfter = false;
 		if (GetUIState() == UISTATE_INGAME) {
 			browsePauseAfter = Core_IsStepping();
 			if (!browsePauseAfter)
-				Core_EnableStepping(true, "ui.boot", 0);
+				Core_Break("ui.boot", 0);
 		}
 		auto mm = GetI18NCategory(I18NCat::MAINMENU);
 
 		W32Util::MakeTopMost(GetHWND(), false);
 
 		if (browseDirectory) {
-			System_BrowseForFolder(mm->T("Load"), [](const std::string &value, int) {
+			System_BrowseForFolder(token, mm->T("Load"), Path(), [](const std::string &value, int) {
 				BrowseAndBootDone(value);
 			});
 		} else {
-			System_BrowseForFile(mm->T("Load"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
+			System_BrowseForFile(token, mm->T("Load"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
 				BrowseAndBootDone(value);
 			});
 		}
@@ -344,21 +360,21 @@ namespace MainWindow {
 
 	void BrowseAndBootDone(std::string filename) {
 		if (GetUIState() == UISTATE_INGAME || GetUIState() == UISTATE_EXCEPTION || GetUIState() == UISTATE_PAUSEMENU) {
-			Core_EnableStepping(false);
+			Core_Resume();
 		}
 		filename = ReplaceAll(filename, "\\", "/");
 		System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, filename);
 		W32Util::MakeTopMost(GetHWND(), g_Config.bTopMost);
 	}
 
-	static void UmdSwitchAction() {
+	static void UmdSwitchAction(RequesterToken token) {
 		auto mm = GetI18NCategory(I18NCat::MAINMENU);
-		System_BrowseForFile(mm->T("Switch UMD"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
+		System_BrowseForFile(token, mm->T("Switch UMD"), BrowseFileType::BOOTABLE, [](const std::string &value, int) {
 			__UmdReplace(Path(value));
 		});
 	}
 
-	static void SaveStateActionFinished(SaveState::Status status, const std::string &message, void *userdata) {
+	static void SaveStateActionFinished(SaveState::Status status, std::string_view message, void *userdata) {
 		if (!message.empty() && (!g_Config.bDumpFrames || !g_Config.bDumpVideoOutput)) {
 			g_OSD.Show(status == SaveState::Status::SUCCESS ? OSDType::MESSAGE_SUCCESS : OSDType::MESSAGE_ERROR, message, status == SaveState::Status::SUCCESS ? 2.0 : 5.0);
 		}
@@ -440,15 +456,15 @@ namespace MainWindow {
 		// Parse the menu selections:
 		switch (wmId) {
 		case ID_FILE_LOAD:
-			BrowseAndBoot("", false);
+			BrowseAndBoot(NON_EPHEMERAL_TOKEN, "", false);
 			break;
 
 		case ID_FILE_LOAD_DIR:
-			BrowseAndBoot("", true);
+			BrowseAndBoot(NON_EPHEMERAL_TOKEN, "", true);
 			break;
 
 		case ID_FILE_LOAD_MEMSTICK:
-			BrowseAndBoot(GetSysDirectory(DIRECTORY_GAME).ToString());
+			BrowseAndBoot(NON_EPHEMERAL_TOKEN, GetSysDirectory(DIRECTORY_GAME).ToString());
 			break;
 
 		case ID_FILE_OPEN_NEW_INSTANCE:
@@ -470,23 +486,25 @@ namespace MainWindow {
 				if (disasmWindow)
 					SendMessage(disasmWindow->GetDlgHandle(), WM_COMMAND, IDC_STOPGO, 0);
 				else
-					Core_EnableStepping(false);
+					Core_Resume();
 			} else {
 				if (disasmWindow)
 					SendMessage(disasmWindow->GetDlgHandle(), WM_COMMAND, IDC_STOPGO, 0);
 				else
-					Core_EnableStepping(true, "ui.break", 0);
+					Core_Break("ui.break", 0);
 			}
 			noFocusPause = !noFocusPause;	// If we pause, override pause on lost focus
 			break;
 
 		case ID_EMULATION_PAUSE:
-			System_PostUIMessage(UIMessage::REQUEST_GAME_PAUSE);
+			if (!NetworkWarnUserIfOnlineAndCantSpeed()) {
+				System_PostUIMessage(UIMessage::REQUEST_GAME_PAUSE);
+			}
 			break;
 
 		case ID_EMULATION_STOP:
 			if (Core_IsStepping())
-				Core_EnableStepping(false);
+				Core_Resume();
 
 			Core_Stop();
 			System_PostUIMessage(UIMessage::REQUEST_GAME_STOP);
@@ -495,11 +513,11 @@ namespace MainWindow {
 
 		case ID_EMULATION_RESET:
 			System_PostUIMessage(UIMessage::REQUEST_GAME_RESET);
-			Core_EnableStepping(false);
+			Core_Resume();
 			break;
 
 		case ID_EMULATION_SWITCH_UMD:
-			UmdSwitchAction();
+			UmdSwitchAction(NON_EPHEMERAL_TOKEN);
 			break;
 
 		case ID_EMULATION_ROTATION_H:   g_Config.iInternalScreenRotation = ROTATION_LOCKED_HORIZONTAL; break;
@@ -517,8 +535,9 @@ namespace MainWindow {
 				System_PostUIMessage(UIMessage::SHOW_CHAT_SCREEN);
 			}
 			break;
+
 		case ID_FILE_LOADSTATEFILE:
-			if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(false) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				if (W32Util::BrowseForFileName(true, hWnd, L"Load state", 0, L"Save States (*.ppst)\0*.ppst\0All files\0*.*\0\0", L"ppst", fn)) {
 					SetCursor(LoadCursor(0, IDC_WAIT));
 					SaveState::Load(Path(fn), -1, SaveStateActionFinished);
@@ -526,7 +545,7 @@ namespace MainWindow {
 			}
 			break;
 		case ID_FILE_SAVESTATEFILE:
-			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				if (W32Util::BrowseForFileName(false, hWnd, L"Save state", 0, L"Save States (*.ppst)\0*.ppst\0All files\0*.*\0\0", L"ppst", fn)) {
 					SetCursor(LoadCursor(0, IDC_WAIT));
 					SaveState::Save(Path(fn), -1, SaveStateActionFinished);
@@ -536,7 +555,7 @@ namespace MainWindow {
 
 		case ID_FILE_SAVESTATE_NEXT_SLOT:
 		{
-			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				SaveState::NextSlot();
 				System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 			}
@@ -545,8 +564,9 @@ namespace MainWindow {
 
 		case ID_FILE_SAVESTATE_NEXT_SLOT_HC:
 		{
-			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
-				if (!KeyMap::PspButtonHasMappings(VIRTKEY_NEXT_SLOT)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
+				// We let F3 (search next) in the imdebugger take priority, if active.
+				if (!KeyMap::PspButtonHasMappings(VIRTKEY_NEXT_SLOT) && !g_Config.bShowImDebugger) {
 					SaveState::NextSlot();
 					System_PostUIMessage(UIMessage::SAVESTATE_DISPLAY_SLOT);
 				}
@@ -559,13 +579,13 @@ namespace MainWindow {
 		case ID_FILE_SAVESTATE_SLOT_3:
 		case ID_FILE_SAVESTATE_SLOT_4:
 		case ID_FILE_SAVESTATE_SLOT_5:
-			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				g_Config.iCurrentStateSlot = wmId - ID_FILE_SAVESTATE_SLOT_1;
 			}
 			break;
 
 		case ID_FILE_QUICKLOADSTATE:
-			if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(false) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				SetCursor(LoadCursor(0, IDC_WAIT));
 				SaveState::LoadSlot(PSP_CoreParameter().fileToStart, g_Config.iCurrentStateSlot, SaveStateActionFinished);
 			}
@@ -573,7 +593,7 @@ namespace MainWindow {
 
 		case ID_FILE_QUICKLOADSTATE_HC:
 		{
-			if (!Achievements::WarnUserIfHardcoreModeActive(false)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(false) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				if (!KeyMap::PspButtonHasMappings(VIRTKEY_LOAD_STATE)) {
 					SetCursor(LoadCursor(0, IDC_WAIT));
 					SaveState::LoadSlot(PSP_CoreParameter().fileToStart, g_Config.iCurrentStateSlot, SaveStateActionFinished);
@@ -583,7 +603,7 @@ namespace MainWindow {
 		}
 		case ID_FILE_QUICKSAVESTATE:
 		{
-			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				SetCursor(LoadCursor(0, IDC_WAIT));
 				SaveState::SaveSlot(PSP_CoreParameter().fileToStart, g_Config.iCurrentStateSlot, SaveStateActionFinished);
 			}
@@ -592,7 +612,7 @@ namespace MainWindow {
 
 		case ID_FILE_QUICKSAVESTATE_HC:
 		{
-			if (!Achievements::WarnUserIfHardcoreModeActive(true)) {
+			if (!Achievements::WarnUserIfHardcoreModeActive(true) && !NetworkWarnUserIfOnlineAndCantSavestate()) {
 				if (!KeyMap::PspButtonHasMappings(VIRTKEY_SAVE_STATE))
 				{
 					SetCursor(LoadCursor(0, IDC_WAIT));
@@ -802,7 +822,7 @@ namespace MainWindow {
 
 		case ID_DEBUG_MEMORYBASE:
 		{
-			W32Util::CopyTextToClipboard(hWnd, ConvertUTF8ToWString(StringFromFormat("%016llx", (uint64_t)(uintptr_t)Memory::base)));
+			System_CopyStringToClipboard(StringFromFormat("%016llx", (uint64_t)(uintptr_t)Memory::base));
 			break;
 		}
 
@@ -812,7 +832,6 @@ namespace MainWindow {
 			if (!InputBox_GetString(hInst, hWnd, L"Disc filename", filename, filename)) {
 				break;
 			}
-
 			const char *lastSlash = strrchr(filename.c_str(), '/');
 			if (lastSlash) {
 				fn = lastSlash + 1;
@@ -852,7 +871,7 @@ namespace MainWindow {
 		break;
 
 		case ID_DEBUG_LOG:
-			LogManager::GetInstance()->GetConsoleListener()->Show(LogManager::GetInstance()->GetConsoleListener()->Hidden());
+			g_logManager.GetConsoleListener()->Show(g_logManager.GetConsoleListener()->Hidden());
 			break;
 
 		case ID_DEBUG_IGNOREILLEGALREADS:
@@ -860,13 +879,17 @@ namespace MainWindow {
 			break;
 
 		case ID_OPTIONS_FULLSCREEN:
-			SendToggleFullscreen(!g_Config.UseFullScreen());
+			if (!g_Config.bShowImDebugger) {
+				SendToggleFullscreen(!g_Config.UseFullScreen());
+			}
 			break;
 
 		case ID_OPTIONS_TEXTUREFILTERING_AUTO:   g_Config.iTexFiltering = TEX_FILTER_AUTO; break;
 		case ID_OPTIONS_NEARESTFILTERING:        g_Config.iTexFiltering = TEX_FILTER_FORCE_NEAREST; break;
 		case ID_OPTIONS_LINEARFILTERING:         g_Config.iTexFiltering = TEX_FILTER_FORCE_LINEAR; break;
 		case ID_OPTIONS_AUTOMAXQUALITYFILTERING: g_Config.iTexFiltering = TEX_FILTER_AUTO_MAX_QUALITY; break;
+
+		case ID_OPTIONS_SMART2DTEXTUREFILTERING: g_Config.bSmart2DTexFiltering = !g_Config.bSmart2DTexFiltering; break;
 
 		case ID_OPTIONS_BUFLINEARFILTER:  g_Config.iDisplayFilter = SCALE_LINEAR; break;
 		case ID_OPTIONS_BUFNEARESTFILTER: g_Config.iDisplayFilter = SCALE_NEAREST; break;
@@ -922,6 +945,10 @@ namespace MainWindow {
 			g_TakeScreenshot = true;
 			break;
 
+		case ID_DEBUG_RESTARTGRAPHICS:
+			System_PostUIMessage(UIMessage::RESTART_GRAPHICS);
+			break;
+
 		case ID_FILE_DUMPFRAMES:
 			g_Config.bDumpFrames = !g_Config.bDumpFrames;
 			break;
@@ -939,7 +966,12 @@ namespace MainWindow {
 			break;
 
 		default:
-			MessageBox(hWnd, L"Unimplemented", L"Sorry", 0);
+#ifdef RC_CLIENT_SUPPORTS_RAINTEGRATION
+			if (rc_client_raintegration_activate_menu_item(Achievements::GetClient(), LOWORD(wParam))) {
+				break;
+			}
+#endif
+			MessageBox(hWnd, L"Unhandled menu item", L"Sorry", 0);
 			break;
 		}
 	}
@@ -962,6 +994,7 @@ namespace MainWindow {
 		CHECKITEM(ID_OPTIONS_VSYNC, g_Config.bVSync);
 		CHECKITEM(ID_OPTIONS_TOPMOST, g_Config.bTopMost);
 		CHECKITEM(ID_OPTIONS_PAUSE_FOCUS, g_Config.bPauseOnLostFocus);
+		CHECKITEM(ID_OPTIONS_SMART2DTEXTUREFILTERING, g_Config.bSmart2DTexFiltering);
 		CHECKITEM(ID_EMULATION_SOUND, g_Config.bEnableSound);
 		CHECKITEM(ID_TEXTURESCALING_DEPOSTERIZE, g_Config.bTexDeposterize);
 		CHECKITEM(ID_EMULATION_CHEATS, g_Config.bEnableCheats);

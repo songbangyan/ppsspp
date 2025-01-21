@@ -22,11 +22,6 @@
 #include <d3d11_1.h>
 #include <D3Dcompiler.h>
 
-#ifdef __MINGW32__
-#undef __uuidof
-#define __uuidof(type) IID_##type
-#endif
-
 namespace Draw {
 
 static constexpr int MAX_BOUND_TEXTURES = 8;
@@ -41,7 +36,6 @@ class D3D11DepthStencilState;
 class D3D11SamplerState;
 class D3D11Buffer;
 class D3D11RasterState;
-class D3D11Framebuffer;
 
 // This must stay POD for the memcmp to work reliably.
 struct D3D11DepthStencilKey {
@@ -54,11 +48,46 @@ struct D3D11DepthStencilKey {
 	}
 };
 
-
 class D3D11DepthStencilState : public DepthStencilState {
 public:
-	~D3D11DepthStencilState() {}
+	~D3D11DepthStencilState() = default;
 	DepthStencilStateDesc desc;
+};
+
+// A D3D11Framebuffer is a D3D11Framebuffer plus all the textures it owns.
+class D3D11Framebuffer : public Framebuffer {
+public:
+	D3D11Framebuffer(int width, int height) {
+		width_ = width;
+		height_ = height;
+	}
+	~D3D11Framebuffer() {
+		if (colorTex)
+			colorTex->Release();
+		if (colorRTView)
+			colorRTView->Release();
+		if (colorSRView)
+			colorSRView->Release();
+		if (depthSRView)
+			depthSRView->Release();
+		if (stencilSRView)
+			stencilSRView->Release();
+		if (depthStencilTex)
+			depthStencilTex->Release();
+		if (depthStencilRTView)
+			depthStencilRTView->Release();
+	}
+
+	ID3D11Texture2D *colorTex = nullptr;
+	ID3D11RenderTargetView *colorRTView = nullptr;
+	ID3D11ShaderResourceView *colorSRView = nullptr;
+	ID3D11ShaderResourceView *depthSRView = nullptr;
+	ID3D11ShaderResourceView *stencilSRView = nullptr;
+	DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
+
+	ID3D11Texture2D *depthStencilTex = nullptr;
+	ID3D11DepthStencilView *depthStencilRTView = nullptr;
+	DXGI_FORMAT depthStencilFormat = DXGI_FORMAT_UNKNOWN;
 };
 
 class D3D11DrawContext : public DrawContext {
@@ -91,13 +120,13 @@ public:
 	void UpdateBuffer(Buffer *buffer, const uint8_t *data, size_t offset, size_t size, UpdateBufferFlags flags) override;
 	void UpdateTextureLevels(Texture *texture, const uint8_t **data, TextureCallback initDataCallback, int numLevels) override;
 
-	void CopyFramebufferImage(Framebuffer *src, int level, int x, int y, int z, Framebuffer *dst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits, const char *tag) override;
-	bool BlitFramebuffer(Framebuffer *src, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dst, int dstX1, int dstY1, int dstX2, int dstY2, int channelBits, FBBlitFilter filter, const char *tag) override;
-	bool CopyFramebufferToMemory(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat format, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) override;
+	void CopyFramebufferImage(Framebuffer *src, int level, int x, int y, int z, Framebuffer *dst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, Aspect aspects, const char *tag) override;
+	bool BlitFramebuffer(Framebuffer *src, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dst, int dstX1, int dstY1, int dstX2, int dstY2, Aspect aspects, FBBlitFilter filter, const char *tag) override;
+	bool CopyFramebufferToMemory(Framebuffer *src, Aspect channelBits, int x, int y, int w, int h, Draw::DataFormat format, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) override;
 
 	// These functions should be self explanatory.
 	void BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) override;
-	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) override;
+	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, Aspect channelBit, int layer) override;
 
 	void GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) override;
 
@@ -116,7 +145,7 @@ public:
 	void SetScissorRect(int left, int top, int width, int height) override;
 	void SetViewport(const Viewport &viewport) override;
 	void SetBlendFactor(float color[4]) override {
-		if (memcmp(blendFactor_, color, sizeof(float) * 4)) {
+		if (0 != memcmp(blendFactor_, color, sizeof(float) * 4)) {
 			memcpy(blendFactor_, color, sizeof(float) * 4);
 			blendFactorDirty_ = true;
 		}
@@ -130,9 +159,12 @@ public:
 
 
 	void Draw(int vertexCount, int offset) override;
-	void DrawIndexed(int vertexCount, int offset) override;
+	void DrawIndexed(int indexCount, int offset) override;
 	void DrawUP(const void *vdata, int vertexCount) override;
-	void Clear(int mask, uint32_t colorval, float depthVal, int stencilVal) override;
+	void DrawIndexedUP(const void *vdata, int vertexCount, const void *idata, int indexCount) override;
+	void DrawIndexedClippedBatchUP(const void *vdata, int vertexCount, const void *idata, int indexCount, Slice<ClippedDraw> draws, const void *ub, size_t ubSize) override;
+
+	void Clear(Aspect mask, uint32_t colorval, float depthVal, int stencilVal) override;
 
 	void BeginFrame(DebugFlags debugFlags) override;
 	void EndFrame() override;
@@ -142,11 +174,11 @@ public:
 
 	std::string GetInfoString(InfoField info) const override {
 		switch (info) {
-		case APIVERSION: return "Direct3D 11";
-		case VENDORSTRING: return adapterDesc_;
-		case VENDOR: return "";
-		case DRIVER: return "-";
-		case SHADELANGVERSION:
+		case InfoField::APIVERSION: return "Direct3D 11";
+		case InfoField::VENDORSTRING: return adapterDesc_;
+		case InfoField::VENDOR: return "";
+		case InfoField::DRIVER: return "-";
+		case InfoField::SHADELANGVERSION:
 			switch (featureLevel_) {
 			case D3D_FEATURE_LEVEL_9_1: return "Feature Level 9.1"; break;
 			case D3D_FEATURE_LEVEL_9_2: return "Feature Level 9.2"; break;
@@ -159,7 +191,7 @@ public:
 			case D3D_FEATURE_LEVEL_12_1: return "Feature Level 12.1"; break;
 			}
 			return "Unknown feature level";
-		case APINAME: return "Direct3D 11";
+		case InfoField::APINAME: return "Direct3D 11";
 		default: return "?";
 		}
 	}
@@ -236,6 +268,7 @@ private:
 	// Temporaries
 	ID3D11Texture2D *packTexture_ = nullptr;
 	Buffer *upBuffer_ = nullptr;
+	Buffer *upIBuffer_ = nullptr;
 
 	// System info
 	D3D_FEATURE_LEVEL featureLevel_;
@@ -251,10 +284,12 @@ D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *de
 		context1_(deviceContext1),
 		featureLevel_(featureLevel),
 		swapChain_(swapChain),
-		deviceList_(deviceList) {
+		deviceList_(std::move(deviceList)) {
 
 	// We no longer support Windows Phone.
 	_assert_(featureLevel_ >= D3D_FEATURE_LEVEL_9_3);
+
+	caps_.coordConvention = CoordConvention::Direct3D11;
 
 	// Seems like a fair approximation...
 	caps_.dualSourceBlend = featureLevel_ >= D3D_FEATURE_LEVEL_10_0;
@@ -280,6 +315,8 @@ D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *de
 	caps_.fragmentShaderStencilWriteSupported = false;
 	caps_.blendMinMaxSupported = true;
 	caps_.multiSampleLevelsMask = 1;   // More could be supported with some work.
+
+	caps_.provokingVertexLast = false;  // D3D has it first, unfortunately. (and no way to change it).
 
 	caps_.presentInstantModeChange = true;
 	caps_.presentMaxInterval = 4;
@@ -349,7 +386,8 @@ D3D11DrawContext::D3D11DrawContext(ID3D11Device *device, ID3D11DeviceContext *de
 
 	const size_t UP_MAX_BYTES = 65536 * 24;
 
-	upBuffer_ = CreateBuffer(UP_MAX_BYTES, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
+	upBuffer_ = D3D11DrawContext::CreateBuffer(UP_MAX_BYTES, BufferUsageFlag::DYNAMIC | BufferUsageFlag::VERTEXDATA);
+	upIBuffer_ = D3D11DrawContext::CreateBuffer(UP_MAX_BYTES, BufferUsageFlag::DYNAMIC | BufferUsageFlag::INDEXDATA);
 
 	IDXGIDevice1 *dxgiDevice1 = nullptr;
 	hr = device_->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void **>(&dxgiDevice1));
@@ -363,6 +401,7 @@ D3D11DrawContext::~D3D11DrawContext() {
 	DestroyPresets();
 
 	upBuffer_->Release();
+	upIBuffer_->Release();
 	packTexture_->Release();
 
 	// Release references.
@@ -632,7 +671,7 @@ ID3D11DepthStencilState *D3D11DrawContext::GetCachedDepthStencilState(const D3D1
 DepthStencilState *D3D11DrawContext::CreateDepthStencilState(const DepthStencilStateDesc &desc) {
 	D3D11DepthStencilState *dss = new D3D11DepthStencilState();
 	dss->desc = desc;
-	return dynamic_cast<DepthStencilState *>(dss);
+	return static_cast<DepthStencilState *>(dss);
 }
 
 BlendState *D3D11DrawContext::CreateBlendState(const BlendStateDesc &desc) {
@@ -748,7 +787,6 @@ InputLayout *D3D11DrawContext::CreateInputLayout(const InputLayoutDesc &desc) {
 	inputLayout->desc = desc;
 
 	// Translate to D3D11 elements;
-	inputLayout->elements.reserve(desc.attributes.size());
 	for (size_t i = 0; i < desc.attributes.size(); i++) {
 		D3D11_INPUT_ELEMENT_DESC el;
 		el.AlignedByteOffset = desc.attributes[i].offset;
@@ -1037,7 +1075,7 @@ void D3D11DrawContext::UpdateTextureLevels(Texture *texture, const uint8_t **dat
 
 ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLanguage language, const uint8_t *data, size_t dataSize, const char *tag) {
 	if (language != ShaderLanguage::HLSL_D3D11) {
-		ERROR_LOG(G3D, "Unsupported shader language");
+		ERROR_LOG(Log::G3D, "Unsupported shader language");
 		return nullptr;
 	}
 
@@ -1080,7 +1118,7 @@ ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLang
 	}
 	if (errorMsgs) {
 		errors = std::string((const char *)errorMsgs->GetBufferPointer(), errorMsgs->GetBufferSize());
-		ERROR_LOG(G3D, "Failed compiling %s:\n%s\n%s", tag, data, errors.c_str());
+		ERROR_LOG(Log::G3D, "Failed compiling %s:\n%s\n%s", tag, data, errors.c_str());
 		errorMsgs->Release();
 	}
 
@@ -1105,7 +1143,7 @@ ShaderModule *D3D11DrawContext::CreateShaderModule(ShaderStage stage, ShaderLang
 		result = device_->CreateGeometryShader(data, dataSize, nullptr, &module->gs);
 		break;
 	default:
-		ERROR_LOG(G3D, "Unsupported shader stage");
+		ERROR_LOG(Log::G3D, "Unsupported shader stage");
 		result = S_FALSE;
 		break;
 	}
@@ -1143,7 +1181,6 @@ Pipeline *D3D11DrawContext::CreateGraphicsPipeline(const PipelineDesc &desc, con
 
 	std::vector<D3D11ShaderModule *> shaders;
 	D3D11ShaderModule *vshader = nullptr;
-	shaders.reserve(desc.shaders.size());
 	for (auto iter : desc.shaders) {
 		iter->AddRef();
 
@@ -1348,14 +1385,79 @@ void D3D11DrawContext::DrawIndexed(int indexCount, int offset) {
 }
 
 void D3D11DrawContext::DrawUP(const void *vdata, int vertexCount) {
-	ApplyCurrentState();
-
 	int byteSize = vertexCount * curPipeline_->input->stride;
 
 	UpdateBuffer(upBuffer_, (const uint8_t *)vdata, 0, byteSize, Draw::UPDATE_DISCARD);
 	BindVertexBuffer(upBuffer_, 0);
 	int offset = 0;
 	Draw(vertexCount, offset);
+}
+
+void D3D11DrawContext::DrawIndexedUP(const void *vdata, int vertexCount, const void *idata, int indexCount) {
+	int vbyteSize = vertexCount * curPipeline_->input->stride;
+	int ibyteSize = indexCount * sizeof(u16);
+
+	UpdateBuffer(upBuffer_, (const uint8_t *)vdata, 0, vbyteSize, Draw::UPDATE_DISCARD);
+	BindVertexBuffer(upBuffer_, 0);
+
+	UpdateBuffer(upIBuffer_, (const uint8_t *)idata, 0, ibyteSize, Draw::UPDATE_DISCARD);
+	BindIndexBuffer(upIBuffer_, 0);
+	DrawIndexed(indexCount, 0);
+}
+
+void D3D11DrawContext::DrawIndexedClippedBatchUP(const void *vdata, int vertexCount, const void *idata, int indexCount, Slice<ClippedDraw> draws, const void *ub, size_t ubSize) {
+	if (draws.is_empty() || !vertexCount || !indexCount) {
+		return;
+	}
+
+	curPipeline_ = (D3D11Pipeline *)draws[0].pipeline;
+
+	int vbyteSize = vertexCount * curPipeline_->input->stride;
+	int ibyteSize = indexCount * sizeof(u16);
+
+	UpdateBuffer(upBuffer_, (const uint8_t *)vdata, 0, vbyteSize, Draw::UPDATE_DISCARD);
+	BindVertexBuffer(upBuffer_, 0);
+
+	UpdateBuffer(upIBuffer_, (const uint8_t *)idata, 0, ibyteSize, Draw::UPDATE_DISCARD);
+	BindIndexBuffer(upIBuffer_, 0);
+
+	UpdateDynamicUniformBuffer(ub, ubSize);
+	ApplyCurrentState();
+
+	for (int i = 0; i < draws.size(); i++) {
+		if (draws[i].pipeline != curPipeline_) {
+			curPipeline_ = (D3D11Pipeline *)draws[i].pipeline;
+			ApplyCurrentState();
+			UpdateDynamicUniformBuffer(ub, ubSize);
+		}
+
+		if (draws[i].bindTexture) {
+			ID3D11ShaderResourceView *view = ((D3D11Texture *)draws[i].bindTexture)->View();
+			context_->PSSetShaderResources(0, 1, &view);
+		} else {
+			ID3D11ShaderResourceView *view = ((D3D11Framebuffer *)draws[i].bindFramebufferAsTex)->colorSRView;
+			switch (draws[i].aspect) {
+			case Aspect::DEPTH_BIT:
+				view = ((D3D11Framebuffer *)draws[i].bindFramebufferAsTex)->depthSRView;
+				break;
+			case Aspect::STENCIL_BIT:
+				view = ((D3D11Framebuffer *)draws[i].bindFramebufferAsTex)->stencilSRView;
+				break;
+			default:
+				break;
+			}
+			context_->PSSetShaderResources(0, 1, &view);
+		}
+		ID3D11SamplerState *sstate = ((D3D11SamplerState *)draws[i].samplerState)->ss;
+		context_->PSSetSamplers(0, 1, &sstate);
+		D3D11_RECT rc;
+		rc.left = draws[i].clipx;
+		rc.top = draws[i].clipy;
+		rc.right = draws[i].clipx + draws[i].clipw;
+		rc.bottom = draws[i].clipy + draws[i].cliph;
+		context_->RSSetScissorRects(1, &rc);
+		context_->DrawIndexed(draws[i].indexCount, draws[i].indexOffset, 0);
+	}
 }
 
 uint32_t D3D11DrawContext::GetDataFormatSupport(DataFormat fmt) const {
@@ -1379,39 +1481,6 @@ uint32_t D3D11DrawContext::GetDataFormatSupport(DataFormat fmt) const {
 		support |= FMT_AUTOGEN_MIPS;
 	return support;
 }
-
-// A D3D11Framebuffer is a D3D11Framebuffer plus all the textures it owns.
-class D3D11Framebuffer : public Framebuffer {
-public:
-	D3D11Framebuffer(int width, int height) {
-		width_ = width;
-		height_ = height;
-	}
-	~D3D11Framebuffer() {
-		if (colorTex)
-			colorTex->Release();
-		if (colorRTView)
-			colorRTView->Release();
-		if (colorSRView)
-			colorSRView->Release();
-		if (depthSRView)
-			depthSRView->Release();
-		if (depthStencilTex)
-			depthStencilTex->Release();
-		if (depthStencilRTView)
-			depthStencilRTView->Release();
-	}
-
-	ID3D11Texture2D *colorTex = nullptr;
-	ID3D11RenderTargetView *colorRTView = nullptr;
-	ID3D11ShaderResourceView *colorSRView = nullptr;
-	ID3D11ShaderResourceView *depthSRView = nullptr;
-	DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;
-
-	ID3D11Texture2D *depthStencilTex = nullptr;
-	ID3D11DepthStencilView *depthStencilRTView = nullptr;
-	DXGI_FORMAT depthStencilFormat = DXGI_FORMAT_UNKNOWN;
-};
 
 Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	HRESULT hr;
@@ -1486,7 +1555,19 @@ Framebuffer *D3D11DrawContext::CreateFramebuffer(const FramebufferDesc &desc) {
 		depthViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 		hr = device_->CreateShaderResourceView(fb->depthStencilTex, &depthViewDesc, &fb->depthSRView);
 		if (FAILED(hr)) {
-			WARN_LOG(G3D, "Failed to create SRV for depth buffer.");
+			WARN_LOG(Log::G3D, "Failed to create SRV for depth buffer.");
+			fb->depthSRView = nullptr;
+		}
+
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC depthStencilViewDesc{};
+		depthStencilViewDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+		depthStencilViewDesc.Texture2D.MostDetailedMip = 0;
+		depthStencilViewDesc.Texture2D.MipLevels = 1;
+		depthStencilViewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		hr = device_->CreateShaderResourceView(fb->depthStencilTex, &depthViewDesc, &fb->stencilSRView);
+		if (FAILED(hr)) {
+			WARN_LOG(Log::G3D, "Failed to create SRV for depth+stencil buffer.");
 			fb->depthSRView = nullptr;
 		}
 	}
@@ -1521,17 +1602,17 @@ void D3D11DrawContext::BindSamplerStates(int start, int count, SamplerState **st
 	context_->PSSetSamplers(start, count, samplers);
 }
 
-void D3D11DrawContext::Clear(int mask, uint32_t colorval, float depthVal, int stencilVal) {
-	if ((mask & FBChannel::FB_COLOR_BIT) && curRenderTargetView_) {
+void D3D11DrawContext::Clear(Aspect mask, uint32_t colorval, float depthVal, int stencilVal) {
+	if ((mask & Aspect::COLOR_BIT) && curRenderTargetView_) {
 		float colorRGBA[4];
 		Uint8x4ToFloat4(colorRGBA, colorval);
 		context_->ClearRenderTargetView(curRenderTargetView_, colorRGBA);
 	}
-	if ((mask & (FBChannel::FB_DEPTH_BIT | FBChannel::FB_STENCIL_BIT)) && curDepthStencilView_) {
+	if ((mask & (Aspect::DEPTH_BIT | Aspect::STENCIL_BIT)) && curDepthStencilView_) {
 		UINT clearFlag = 0;
-		if (mask & FBChannel::FB_DEPTH_BIT)
+		if (mask & Aspect::DEPTH_BIT)
 			clearFlag |= D3D11_CLEAR_DEPTH;
-		if (mask & FBChannel::FB_STENCIL_BIT)
+		if (mask & Aspect::STENCIL_BIT)
 			clearFlag |= D3D11_CLEAR_STENCIL;
 		context_->ClearDepthStencilView(curDepthStencilView_, clearFlag, depthVal, stencilVal);
 	}
@@ -1570,18 +1651,18 @@ void D3D11DrawContext::BeginFrame(DebugFlags debugFlags) {
 	}
 }
 
-void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x, int y, int z, Framebuffer *dstfb, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBit, const char *tag) {
+void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x, int y, int z, Framebuffer *dstfb, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, Aspect aspect, const char *tag) {
 	D3D11Framebuffer *src = (D3D11Framebuffer *)srcfb;
 	D3D11Framebuffer *dst = (D3D11Framebuffer *)dstfb;
 
 	ID3D11Texture2D *srcTex = nullptr;
 	ID3D11Texture2D *dstTex = nullptr;
-	switch (channelBit) {
-	case FBChannel::FB_COLOR_BIT:
+	switch (aspect) {
+	case Aspect::COLOR_BIT:
 		srcTex = src->colorTex;
 		dstTex = dst->colorTex;
 		break;
-	case FBChannel::FB_DEPTH_BIT:
+	case Aspect::DEPTH_BIT:
 		srcTex = src->depthStencilTex;
 		dstTex = dst->depthStencilTex;
 		break;
@@ -1595,7 +1676,7 @@ void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x
 		return;
 	}
 
-	if (channelBit != FBChannel::FB_DEPTH_BIT) {
+	if (aspect != Aspect::DEPTH_BIT) {
 		// Non-full copies are not supported for the depth channel.
 		// Note that we need to clip the source box.
 		if (x < 0) {
@@ -1619,13 +1700,13 @@ void D3D11DrawContext::CopyFramebufferImage(Framebuffer *srcfb, int level, int x
 	}
 }
 
-bool D3D11DrawContext::BlitFramebuffer(Framebuffer *srcfb, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dstfb, int dstX1, int dstY1, int dstX2, int dstY2, int channelBits, FBBlitFilter filter, const char *tag) {
+bool D3D11DrawContext::BlitFramebuffer(Framebuffer *srcfb, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dstfb, int dstX1, int dstY1, int dstX2, int dstY2, Aspect aspects, FBBlitFilter filter, const char *tag) {
 	// Unfortunately D3D11 has no equivalent to this, gotta render a quad. Well, in some cases we can issue a copy instead.
 	Crash();
 	return false;
 }
 
-bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits, int bx, int by, int bw, int bh, Draw::DataFormat destFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
+bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelBits, int bx, int by, int bw, int bh, Draw::DataFormat destFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
 	D3D11Framebuffer *fb = (D3D11Framebuffer *)src;
 
 	if (fb) {
@@ -1643,7 +1724,7 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits
 	if (bh <= 0 || bw <= 0)
 		return true;
 
-	bool useGlobalPacktex = (bx + bw <= 512 && by + bh <= 512) && channelBits == FB_COLOR_BIT;
+	bool useGlobalPacktex = (bx + bw <= 512 && by + bh <= 512) && channelBits == Aspect::COLOR_BIT;
 
 	ID3D11Texture2D *packTex = nullptr;
 	if (!useGlobalPacktex) {
@@ -1657,11 +1738,11 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits
 		packDesc.Usage = D3D11_USAGE_STAGING;
 		packDesc.SampleDesc.Count = 1;
 		switch (channelBits) {
-		case FB_COLOR_BIT:
+		case Aspect::COLOR_BIT:
 			packDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;  // TODO: fb->colorFormat;
 			break;
-		case FB_DEPTH_BIT:
-		case FB_STENCIL_BIT:
+		case Aspect::DEPTH_BIT:
+		case Aspect::STENCIL_BIT:
 			if (!fb) {
 				// Not supported.
 				return false;
@@ -1674,8 +1755,8 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits
 		device_->CreateTexture2D(&packDesc, nullptr, &packTex);
 	} else {
 		switch (channelBits) {
-		case FB_DEPTH_BIT:
-		case FB_STENCIL_BIT:
+		case Aspect::DEPTH_BIT:
+		case Aspect::STENCIL_BIT:
 			if (!fb)
 				return false;
 		default:
@@ -1690,12 +1771,12 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits
 	D3D11_BOX srcBox{ (UINT)bx, (UINT)by, 0, (UINT)(bx + bw), (UINT)(by + bh), 1 };
 	DataFormat srcFormat = DataFormat::UNDEFINED;
 	switch (channelBits) {
-	case FB_COLOR_BIT:
+	case Aspect::COLOR_BIT:
 		context_->CopySubresourceRegion(packTex, 0, bx, by, 0, fb ? fb->colorTex : bbRenderTargetTex_, 0, &srcBox);
 		srcFormat = DataFormat::R8G8B8A8_UNORM;
 		break;
-	case FB_DEPTH_BIT:
-	case FB_STENCIL_BIT:
+	case Aspect::DEPTH_BIT:
+	case Aspect::STENCIL_BIT:
 		// For depth/stencil buffers, we can't reliably copy subrectangles, so just copy the whole resource.
 		_assert_(fb);  // Can't copy depth/stencil from backbuffer. Shouldn't happen thanks to checks above.
 		context_->CopyResource(packTex, fb->depthStencilTex);
@@ -1718,12 +1799,12 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits
 
 	const size_t srcByteOffset = by * map.RowPitch + bx * DataFormatSizeInBytes(srcFormat);
 	const uint8_t *srcWithOffset = (const uint8_t *)map.pData + srcByteOffset;
-	switch (channelBits) {
-	case FB_COLOR_BIT:
+	switch ((Aspect)channelBits) {
+	case Aspect::COLOR_BIT:
 		// Pixel size always 4 here because we always request BGRA8888.
 		ConvertFromRGBA8888((uint8_t *)pixels, srcWithOffset, pixelStride, map.RowPitch / sizeof(uint32_t), bw, bh, destFormat);
 		break;
-	case FB_DEPTH_BIT:
+	case Aspect::DEPTH_BIT:
 		if (srcFormat == destFormat) {
 			// Can just memcpy when it matches no matter the format!
 			uint8_t *dst = (uint8_t *)pixels;
@@ -1741,7 +1822,7 @@ bool D3D11DrawContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits
 			_assert_(false);
 		}
 		break;
-	case FB_STENCIL_BIT:
+	case Aspect::STENCIL_BIT:
 		if (srcFormat == destFormat) {
 			// Can just memcpy when it matches no matter the format!
 			uint8_t *dst = (uint8_t *)pixels;
@@ -1825,15 +1906,15 @@ void D3D11DrawContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Ren
 	}
 }
 
-void D3D11DrawContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) {
+void D3D11DrawContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, Aspect channelBit, int layer) {
 	_dbg_assert_(binding < MAX_BOUND_TEXTURES);
 	_dbg_assert_(layer == ALL_LAYERS || layer == 0);  // No multiple layer support on D3D
 	D3D11Framebuffer *fb = (D3D11Framebuffer *)fbo;
 	switch (channelBit) {
-	case FBChannel::FB_COLOR_BIT:
+	case Aspect::COLOR_BIT:
 		context_->PSSetShaderResources(binding, 1, &fb->colorSRView);
 		break;
-	case FBChannel::FB_DEPTH_BIT:
+	case Aspect::DEPTH_BIT:
 		if (fb->depthSRView) {
 			context_->PSSetShaderResources(binding, 1, &fb->depthSRView);
 		}
@@ -1881,7 +1962,7 @@ void D3D11DrawContext::GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h
 	}
 }
 
-DrawContext *T3DCreateD3D11Context(ID3D11Device *device, ID3D11DeviceContext *context, ID3D11Device1 *device1, ID3D11DeviceContext1 *context1, IDXGISwapChain *swapChain, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, std::vector<std::string> adapterNames, int maxInflightFrames) {
+DrawContext *T3DCreateD3D11Context(ID3D11Device *device, ID3D11DeviceContext *context, ID3D11Device1 *device1, ID3D11DeviceContext1 *context1, IDXGISwapChain *swapChain, D3D_FEATURE_LEVEL featureLevel, HWND hWnd, const std::vector<std::string> &adapterNames, int maxInflightFrames) {
 	return new D3D11DrawContext(device, context, device1, context1, swapChain, featureLevel, hWnd, adapterNames, maxInflightFrames);
 }
 

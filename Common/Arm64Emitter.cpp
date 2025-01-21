@@ -934,7 +934,7 @@ void ARM64XEmitter::SetJumpTarget(FixupBranch const& branch)
 
 FixupBranch ARM64XEmitter::CBZ(ARM64Reg Rt)
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 0;
 	branch.reg = Rt;
@@ -943,7 +943,7 @@ FixupBranch ARM64XEmitter::CBZ(ARM64Reg Rt)
 }
 FixupBranch ARM64XEmitter::CBNZ(ARM64Reg Rt)
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 1;
 	branch.reg = Rt;
@@ -952,7 +952,7 @@ FixupBranch ARM64XEmitter::CBNZ(ARM64Reg Rt)
 }
 FixupBranch ARM64XEmitter::B(CCFlags cond)
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 2;
 	branch.cond = cond;
@@ -961,7 +961,7 @@ FixupBranch ARM64XEmitter::B(CCFlags cond)
 }
 FixupBranch ARM64XEmitter::TBZ(ARM64Reg Rt, u8 bit)
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 3;
 	branch.reg = Rt;
@@ -971,7 +971,7 @@ FixupBranch ARM64XEmitter::TBZ(ARM64Reg Rt, u8 bit)
 }
 FixupBranch ARM64XEmitter::TBNZ(ARM64Reg Rt, u8 bit)
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 4;
 	branch.reg = Rt;
@@ -981,7 +981,7 @@ FixupBranch ARM64XEmitter::TBNZ(ARM64Reg Rt, u8 bit)
 }
 FixupBranch ARM64XEmitter::B()
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 5;
 	HINT(HINT_NOP);
@@ -989,7 +989,7 @@ FixupBranch ARM64XEmitter::B()
 }
 FixupBranch ARM64XEmitter::BL()
 {
-	FixupBranch branch;
+	FixupBranch branch{};
 	branch.ptr = m_code;
 	branch.type = 6;
 	HINT(HINT_NOP);
@@ -1041,7 +1041,7 @@ void ARM64XEmitter::QuickCallFunction(ARM64Reg scratchreg, const void *func) {
 	s64 distance = (s64)func - (s64)m_code;
 	distance >>= 2;  // Can only branch to opcode-aligned (4) addresses
 	if (!IsInRangeImm26(distance)) {
-		// WARN_LOG(DYNA_REC, "Distance too far in function call (%p to %p)! Using scratch.", m_code, func);
+		// WARN_LOG(Log::JIT, "Distance too far in function call (%p to %p)! Using scratch.", m_code, func);
 		MOVI2R(scratchreg, (uintptr_t)func);
 		BLR(scratchreg);
 	} else {
@@ -1934,7 +1934,7 @@ inline int64_t abs64(int64_t x) {
 	return x >= 0 ? x : -x;
 }
 
-int Count(bool part[4]) {
+static int Count(const bool part[4]) {
 	int cnt = 0;
 	for (int i = 0; i < 4; i++) {
 		if (part[i])
@@ -4295,7 +4295,7 @@ bool ARM64FloatEmitter::TryAnyMOVI(u8 size, ARM64Reg Rd, uint64_t elementValue) 
 
 	uint64_t value = elementValue;
 	if (size != 64) {
-		uint64_t masked = elementValue & ((1 << size) - 1);
+		uint64_t masked = elementValue & ((1ULL << size) - 1ULL);
 		for (int i = size; i < 64; ++i) {
 			value |= masked << i;
 		}

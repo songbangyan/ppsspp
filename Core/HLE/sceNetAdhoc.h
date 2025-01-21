@@ -20,19 +20,17 @@
 #include <deque>
 #include "Core/HLE/proAdhoc.h"
 
+
 #ifdef _MSC_VER
 #pragma pack(push,1)
 #endif
-typedef struct MatchingArgs {
-	u32_le data[6]; // ContextID, EventID, bufAddr[ to MAC], OptLen, OptAddr[, EntryPoint]
-} PACK MatchingArgs;
-
 typedef struct SceNetAdhocDiscoverParam {
 	u32_le unknown1; // SleepMode? (ie. 0 on on Legend Of The Dragon, 1 on Dissidia 012)
 	char   groupName[ADHOCCTL_GROUPNAME_LEN];
 	u32_le unknown2; // size of something? (ie. 0x3c on Legend Of The Dragon, 0x14 on Dissidia 012) // Note: the param size is 0x14 may be it can contains extra data too?
 	u32_le result; // inited to 0?
 } PACK SceNetAdhocDiscoverParam;
+
 #ifdef _MSC_VER
 #pragma pack(pop)
 #endif
@@ -96,23 +94,30 @@ enum AdhocDiscoverResult : int
 class PointerWrap;
 
 void Register_sceNetAdhoc();
+void Register_sceNetAdhocDiscover();
+void Register_sceNetAdhocctl();
+
 
 u32_le __CreateHLELoop(u32_le* loopAddr, const char* sceFuncName, const char* hleFuncName, const char* tagName = NULL);
 void __NetAdhocInit();
 void __NetAdhocShutdown();
 void __NetAdhocDoState(PointerWrap &p);
 void __UpdateAdhocctlHandlers(u32 flags, u32 error);
-void __UpdateMatchingHandler(const MatchingArgs &params);
 
-// I have to call this from netdialog
+bool __NetAdhocConnected();
+
+// Called from netdialog (and from sceNetApctl)
+// NOTE: use hleCall for sceNet* ones!
 int sceNetAdhocctlGetState(u32 ptrToStatus);
 int sceNetAdhocctlCreate(const char * groupName);
 int sceNetAdhocctlConnect(const char* groupName);
 int sceNetAdhocctlJoin(u32 scanInfoAddr);
 int sceNetAdhocctlScan();
 int sceNetAdhocctlGetScanInfo(u32 sizeAddr, u32 bufAddr);
+int sceNetAdhocctlDisconnect();
+int sceNetAdhocctlInit(int stackSize, int prio, u32 productAddr);
+int sceNetAdhocctlTerm();
 
-int NetAdhocMatching_Term();
 int NetAdhocctl_Term();
 int NetAdhocctl_GetState();
 int NetAdhocctl_Create(const char* groupName);
@@ -121,7 +126,7 @@ int NetAdhoc_Term();
 // May need to use these from sceNet.cpp
 extern bool netAdhocInited;
 extern bool netAdhocctlInited;
-extern bool networkInited;
+extern bool g_adhocServerConnected;
 extern bool netAdhocGameModeEntered;
 extern int netAdhocEnterGameModeTimeout;
 extern int adhocDefaultTimeout; //3000000 usec
@@ -138,3 +143,11 @@ extern u32_le dummyThreadCode[3];
 extern u32 matchingThreadHackAddr;
 extern u32_le matchingThreadCode[3];
 
+// Exposing those for the matching routines
+// NOTE: use hleCall for sceNet* ones!
+int sceNetAdhocPdpSend(int id, const char* mac, u32 port, void* data, int len, int timeout, int flag);
+int sceNetAdhocPdpRecv(int id, void* addr, void* port, void* buf, void* dataLength, u32 timeout, int flag);
+int sceNetAdhocPdpCreate(const char* mac, int port, int bufferSize, u32 flag);
+
+int NetAdhoc_SetSocketAlert(int id, s32_le flag);
+int NetAdhocPdp_Delete(int id, int unknown);

@@ -18,14 +18,12 @@
 #pragma once
 
 #include <d3d9.h>
+#include <wrl/client.h>
 
 #include "Common/Data/Collections/Hashmaps.h"
 #include "GPU/GPUState.h"
-#include "GPU/Common/GPUDebugInterface.h"
-#include "GPU/Common/IndexGenerator.h"
-#include "GPU/Common/VertexDecoderCommon.h"
 #include "GPU/Common/DrawEngineCommon.h"
-#include "GPU/Common/GPUStateUtils.h"
+#include "GPU/MiscTypes.h"
 
 struct DecVtxFormat;
 struct UVScale;
@@ -63,25 +61,13 @@ public:
 	void InitDeviceObjects();
 	void DestroyDeviceObjects();
 
-	void BeginFrame();
+	void BeginFrame() override;
 
 	// So that this can be inlined
-	void Flush() {
-		if (!numDrawVerts_)
-			return;
-		DoFlush();
-	}
+	void Flush() override;
 
 	void FinishDeferred() {
-		if (!numDrawVerts_)
-			return;
-		DecodeVerts(decoded_);
-	}
-
-	void DispatchFlush() override {
-		if (!numDrawVerts_)
-			return;
-		Flush();
+		DecodeVerts(dec_, decoded_);
 	}
 
 protected:
@@ -90,20 +76,19 @@ protected:
 
 private:
 	void Invalidate(InvalidationCallbackFlags flags);
-	void DoFlush();
 
 	void ApplyDrawState(int prim);
 	void ApplyDrawStateLate();
 
-	IDirect3DVertexDeclaration9 *SetupDecFmtForDraw(const DecVtxFormat &decFmt, u32 pspFmt);
+	HRESULT SetupDecFmtForDraw(const DecVtxFormat &decFmt, u32 pspFmt, IDirect3DVertexDeclaration9 **ppVertexDeclaration);
 
 	LPDIRECT3DDEVICE9 device_ = nullptr;
 	Draw::DrawContext *draw_;
 
-	DenseHashMap<u32, IDirect3DVertexDeclaration9 *> vertexDeclMap_;
+	DenseHashMap<u32, Microsoft::WRL::ComPtr<IDirect3DVertexDeclaration9>> vertexDeclMap_;
 
 	// SimpleVertex
-	IDirect3DVertexDeclaration9* transformedVertexDecl_ = nullptr;
+	Microsoft::WRL::ComPtr<IDirect3DVertexDeclaration9> transformedVertexDecl_;
 
 	// Other
 	ShaderManagerDX9 *shaderManager_ = nullptr;

@@ -19,15 +19,14 @@
 // short instruction sequences. Surprisingly many are possible.
 
 #include "ppsspp_config.h"
-#if PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64)
 
+#if PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64)
 #include <cmath>
 #include <limits>
-#include <emmintrin.h>
-
 #include "Common/Math/math_util.h"
 
 #include "Common/CPUDetect.h"
+#include "Common/Math/SIMDHeaders.h"
 #include "Common/Log.h"
 #include "Core/Compatibility.h"
 #include "Core/Config.h"
@@ -123,7 +122,7 @@ void Jit::ApplyPrefixST(u8 *vregs, u32 prefix, VectorSize sz) {
 			// Prefix may say "z, z, z, z" but if this is a pair, we force to x.
 			// TODO: But some ops seem to use const 0 instead?
 			if (regnum >= n) {
-				ERROR_LOG_REPORT(CPU, "Invalid VFPU swizzle: %08x / %d", prefix, sz);
+				ERROR_LOG_REPORT(Log::CPU, "Invalid VFPU swizzle: %08x / %d", prefix, sz);
 				regnum = 0;
 			}
 			fpr.SimpleRegV(origV[regnum], 0);
@@ -3556,7 +3555,7 @@ void Jit::CompVrotShuffle(u8 *dregs, int imm, int n, bool negSin) {
 			break;
 		}
 		default:
-			ERROR_LOG(JIT, "Bad what in vrot");
+			ERROR_LOG(Log::JIT, "Bad what in vrot");
 			break;
 		}
 	}
@@ -3570,7 +3569,7 @@ void Jit::Comp_VRot(MIPSOpcode op) {
 	}
 	if (!js.HasNoPrefix()) {
 		// Prefixes work strangely for this, see IRCompVFPU.
-		WARN_LOG_REPORT(JIT, "vrot instruction using prefixes at %08x", GetCompilerPC());
+		WARN_LOG_REPORT(Log::JIT, "vrot instruction using prefixes at %08x", GetCompilerPC());
 		DISABLE;
 	}
 
@@ -3590,7 +3589,7 @@ void Jit::Comp_VRot(MIPSOpcode op) {
 		// Pair of vrot with the same angle argument. Let's join them (can share sin/cos results).
 		vd2 = MIPS_GET_VD(nextOp);
 		imm2 = (nextOp >> 16) & 0x1f;
-		// NOTICE_LOG(JIT, "Joint VFPU at %08x", js.blockStart);
+		// NOTICE_LOG(Log::JIT, "Joint VFPU at %08x", js.blockStart);
 	}
 
 	u8 sreg;

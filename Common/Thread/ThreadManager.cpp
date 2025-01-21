@@ -59,8 +59,8 @@ ThreadManager::~ThreadManager() {
 
 void ThreadManager::Teardown() {
 	for (TaskThreadContext *&threadCtx : global_->threads_) {
-		threadCtx->cancelled = true;
 		std::unique_lock<std::mutex> lock(threadCtx->mutex);
+		threadCtx->cancelled = true;
 		threadCtx->cond.notify_one();
 	}
 
@@ -99,7 +99,7 @@ void ThreadManager::Teardown() {
 	global_->threads_.clear();
 
 	if (global_->compute_queue_size > 0 || global_->io_queue_size > 0) {
-		WARN_LOG(SYSTEM, "ThreadManager::Teardown() with tasks still enqueued");
+		WARN_LOG(Log::System, "ThreadManager::Teardown() with tasks still enqueued");
 	}
 }
 
@@ -130,10 +130,10 @@ bool ThreadManager::TeardownTask(Task *task, bool enqueue) {
 
 static void WorkerThreadFunc(GlobalThreadContext *global, TaskThreadContext *thread) {
 	if (thread->type == TaskType::CPU_COMPUTE) {
-		snprintf(thread->name, sizeof(thread->name), "PoolWorker %d", thread->index);
+		snprintf(thread->name, sizeof(thread->name), "PoolW %d", thread->index);
 	} else {
 		_assert_(thread->type == TaskType::IO_BLOCKING);
-		snprintf(thread->name, sizeof(thread->name), "PoolWorkerIO %d", thread->index);
+		snprintf(thread->name, sizeof(thread->name), "PoolW IO %d", thread->index);
 	}
 	SetCurrentThreadName(thread->name);
 
@@ -222,7 +222,7 @@ void ThreadManager::Init(int numRealCores, int numLogicalCoresPerCpu) {
 	int numThreads = numComputeThreads_ + std::max(MIN_IO_BLOCKING_THREADS, numComputeThreads_);
 	numThreads_ = numThreads;
 
-	INFO_LOG(SYSTEM, "ThreadManager::Init(compute threads: %d, all: %d)", numComputeThreads_, numThreads_);
+	INFO_LOG(Log::System, "ThreadManager::Init(compute threads: %d, all: %d)", numComputeThreads_, numThreads_);
 
 	for (int i = 0; i < numThreads; i++) {
 		TaskThreadContext *thread = new TaskThreadContext();

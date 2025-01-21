@@ -19,8 +19,10 @@
 
 #include "Common/Log.h"
 #include "Common/Data/Format/IniFile.h"
+#include "Common/Data/Text/I18n.h"
 #include "Common/File/VFS/VFS.h"
 #include "Common/StringUtils.h"
+#include "Common/System/OSD.h"
 #include "Core/Compatibility.h"
 #include "Core/Config.h"
 #include "Core/System.h"
@@ -41,6 +43,10 @@ void Compatibility::Load(const std::string &gameID) {
 		// This loads from assets.
 		if (compat.LoadFromVFS(g_VFS, "compat.ini")) {
 			CheckSettings(compat, gameID);
+		} else {
+			auto e = GetI18NCategory(I18NCat::ERRORS);
+			std::string msg = ApplySafeSubstitutions(e->T("File not found: %1"), "compat.ini");
+			g_OSD.Show(OSDType::MESSAGE_ERROR, msg, 3.0f);
 		}
 	}
 
@@ -74,6 +80,7 @@ void Compatibility::Load(const std::string &gameID) {
 void Compatibility::Clear() {
 	memset(&flags_, 0, sizeof(flags_));
 	memset(&vrCompat_, 0, sizeof(vrCompat_));
+	activeList_.clear();
 }
 
 void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
@@ -83,6 +90,7 @@ void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
 	CheckSetting(iniFile, gameID, "ClearToRAM", &flags_.ClearToRAM);
 	CheckSetting(iniFile, gameID, "Force04154000Download", &flags_.Force04154000Download);
 	CheckSetting(iniFile, gameID, "DrawSyncEatCycles", &flags_.DrawSyncEatCycles);
+	CheckSetting(iniFile, gameID, "DrawSyncInstant", &flags_.DrawSyncInstant);
 	CheckSetting(iniFile, gameID, "FakeMipmapChange", &flags_.FakeMipmapChange);
 	CheckSetting(iniFile, gameID, "RequireBufferedRendering", &flags_.RequireBufferedRendering);
 	CheckSetting(iniFile, gameID, "RequireBlockTransfer", &flags_.RequireBlockTransfer);
@@ -96,7 +104,7 @@ void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
 	CheckSetting(iniFile, gameID, "ForceUMDDelay", &flags_.ForceUMDDelay);
 	CheckSetting(iniFile, gameID, "ForceMax60FPS", &flags_.ForceMax60FPS);
 	CheckSetting(iniFile, gameID, "GoWFramerateHack60", &flags_.GoWFramerateHack60);
-	CheckSetting(iniFile, gameID, "GoWFramerateHack30", &flags_.GoWFramerateHack30);
+	CheckSetting(iniFile, gameID, "FramerateHack30", &flags_.FramerateHack30);
 	CheckSetting(iniFile, gameID, "JitInvalidationHack", &flags_.JitInvalidationHack);
 	CheckSetting(iniFile, gameID, "HideISOFiles", &flags_.HideISOFiles);
 	CheckSetting(iniFile, gameID, "MoreAccurateVMMUL", &flags_.MoreAccurateVMMUL);
@@ -134,8 +142,13 @@ void Compatibility::CheckSettings(IniFile &iniFile, const std::string &gameID) {
 	CheckSetting(iniFile, gameID, "Fontltn12Hack", &flags_.Fontltn12Hack);
 	CheckSetting(iniFile, gameID, "LoadCLUTFromCurrentFrameOnly", &flags_.LoadCLUTFromCurrentFrameOnly);
 	CheckSetting(iniFile, gameID, "ForceUMDReadSpeed", &flags_.ForceUMDReadSpeed);
-	CheckSetting(iniFile, gameID, "AllowDelayedReadbacks", &flags_.AllowDelayedReadbacks);
+	CheckSetting(iniFile, gameID, "KernelGetSystemTimeLowEatMoreCycles", &flags_.KernelGetSystemTimeLowEatMoreCycles);
 	CheckSetting(iniFile, gameID, "TacticsOgreEliminateDebugReadback", &flags_.TacticsOgreEliminateDebugReadback);
+	CheckSetting(iniFile, gameID, "FramebufferAllowLargeVerticalOffset", &flags_.FramebufferAllowLargeVerticalOffset);
+	CheckSetting(iniFile, gameID, "DisableMemcpySlicing", &flags_.DisableMemcpySlicing);
+	CheckSetting(iniFile, gameID, "ForceEnableGPUReadback", &flags_.ForceEnableGPUReadback);
+	CheckSetting(iniFile, gameID, "UseFFMPEGFindStreamInfo", &flags_.UseFFMPEGFindStreamInfo);
+	CheckSetting(iniFile, gameID, "SoftwareRasterDepth", &flags_.SoftwareRasterDepth);
 }
 
 void Compatibility::CheckVRSettings(IniFile &iniFile, const std::string &gameID) {
@@ -143,10 +156,11 @@ void Compatibility::CheckVRSettings(IniFile &iniFile, const std::string &gameID)
 	CheckSetting(iniFile, gameID, "ForceMono", &vrCompat_.ForceMono);
 	CheckSetting(iniFile, gameID, "IdentityViewHack", &vrCompat_.IdentityViewHack);
 	CheckSetting(iniFile, gameID, "MirroringVariant", &vrCompat_.MirroringVariant);
+	CheckSetting(iniFile, gameID, "ProjectionHack", &vrCompat_.ProjectionHack);
 	CheckSetting(iniFile, gameID, "Skyplane", &vrCompat_.Skyplane);
 	CheckSetting(iniFile, gameID, "UnitsPerMeter", &vrCompat_.UnitsPerMeter);
 
-	NOTICE_LOG(G3D, "UnitsPerMeter for %s: %f", gameID.c_str(), vrCompat_.UnitsPerMeter);
+	NOTICE_LOG(Log::G3D, "UnitsPerMeter for %s: %f", gameID.c_str(), vrCompat_.UnitsPerMeter);
 }
 
 void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, bool *flag) {
@@ -156,18 +170,26 @@ void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, co
 		// Shortcut for debugging, sometimes useful to globally enable compat flags.
 		bool all = false;
 		iniFile.Get(option, "ALL", &all, false);
-		*flag |= all;
+		if (all) {
+			*flag |= all;
+			if (!activeList_.empty()) {
+				activeList_ += "\n";
+			}
+			activeList_ += option;
+		}
 	}
 }
 
 void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, float *flag) {
 	std::string value;
-	iniFile.Get(option, gameID.c_str(), &value, "0");
-	*flag = stof(value);
+	if (iniFile.Get(option, gameID.c_str(), &value, "0")) {
+		*flag = stof(value);
+	}
 }
 
 void Compatibility::CheckSetting(IniFile &iniFile, const std::string &gameID, const char *option, int *flag) {
 	std::string value;
-	iniFile.Get(option, gameID.c_str(), &value, "0");
-	*flag = stof(value);
+	if (iniFile.Get(option, gameID.c_str(), &value, "0")) {
+		*flag = stof(value);
+	}
 }

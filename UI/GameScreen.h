@@ -33,7 +33,7 @@ class NoticeView;
 
 class GameScreen : public UIDialogScreenWithGameBackground {
 public:
-	GameScreen(const Path &gamePath);
+	GameScreen(const Path &gamePath, bool inGame);
 	~GameScreen();
 
 	void update() override;
@@ -75,6 +75,7 @@ private:
 	UI::TextView *tvPlayTime_ = nullptr;
 	UI::TextView *tvCRC_ = nullptr;
 	UI::TextView *tvID_ = nullptr;
+	UI::Button *tvCRCCopy_ = nullptr;
 	NoticeView *tvVerified_ = nullptr;
 
 	UI::Choice *btnGameSettings_ = nullptr;
@@ -86,8 +87,8 @@ private:
 	UI::Choice *btnCalcCRC_ = nullptr;
 
 	std::vector<UI::Choice *> otherChoices_;
-	std::vector<Path> saveDirs;
 	std::string CRC32string;
 
 	bool isHomebrew_ = false;
+	bool inGame_ = false;
 };

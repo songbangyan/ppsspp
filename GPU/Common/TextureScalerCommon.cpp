@@ -15,9 +15,8 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/. 
 
-#include <cstddef>
 #include <algorithm>
-#include <cstdlib>
+#include <cstddef>
 #include <cstring>
 #include <cmath>
 
@@ -26,25 +25,13 @@
 #include "Core/Config.h"
 #include "Common/Common.h"
 #include "Common/Log.h"
-#include "Common/CommonFuncs.h"
+#include "Common/Math/SIMDHeaders.h"
 #include "Common/Thread/ParallelLoop.h"
-#include "Core/ThreadPools.h"
-#include "Common/CPUDetect.h"
 #include "ext/xbrz/xbrz.h"
-
-#if defined(_M_SSE)
-#include <emmintrin.h>
-#include <smmintrin.h>
-#endif
 
 // Report the time and throughput for each larger scaling operation in the log
 //#define SCALING_MEASURE_TIME
-
-//#define DEBUG_SCALER_OUTPUT
-
-#ifdef SCALING_MEASURE_TIME
 #include "Common/TimeUtil.h"
-#endif
 
 /////////////////////////////////////// Helper Functions (mostly math for parallelization)
 
@@ -503,7 +490,7 @@ void bilinearH(int factor, const u32 *data, u32 *out, int w, int l, int u) {
 	case 3: bilinearHt<3>(data, out, w, l, u); break;
 	case 4: bilinearHt<4>(data, out, w, l, u); break;
 	case 5: bilinearHt<5>(data, out, w, l, u); break;
-	default: ERROR_LOG(G3D, "Bilinear upsampling only implemented for factors 2 to 5");
+	default: ERROR_LOG(Log::G3D, "Bilinear upsampling only implemented for factors 2 to 5");
 	}
 }
 // integral bilinear upscaling by factor f, vertical part
@@ -537,7 +524,7 @@ void bilinearV(int factor, const u32 *data, u32 *out, int w, int gl, int gu, int
 	case 3: bilinearVt<3>(data, out, w, gl, gu, l, u); break;
 	case 4: bilinearVt<4>(data, out, w, gl, gu, l, u); break;
 	case 5: bilinearVt<5>(data, out, w, gl, gu, l, u); break;
-	default: ERROR_LOG(G3D, "Bilinear upsampling only implemented for factors 2 to 5");
+	default: ERROR_LOG(Log::G3D, "Bilinear upsampling only implemented for factors 2 to 5");
 	}
 }
 
@@ -548,41 +535,6 @@ void bilinearV(int factor, const u32 *data, u32 *out, int w, int gl, int gu, int
 #undef G
 #undef B
 #undef A
-
-#ifdef DEBUG_SCALER_OUTPUT
-
-// used for debugging texture scaling (writing textures to files)
-static int g_imgCount = 0;
-void dbgPPM(int w, int h, u8* pixels, const char* prefix = "dbg") { // 3 component RGB
-	char fn[32];
-	snprintf(fn, 32, "%s%04d.ppm", prefix, g_imgCount++);
-	FILE *fp = fopen(fn, "wb");
-	fprintf(fp, "P6\n%d %d\n255\n", w, h);
-	for (int j = 0; j < h; ++j) {
-		for (int i = 0; i < w; ++i) {
-			static unsigned char color[3];
-			color[0] = pixels[(j*w + i) * 4 + 0];  /* red */
-			color[1] = pixels[(j*w + i) * 4 + 1];  /* green */
-			color[2] = pixels[(j*w + i) * 4 + 2];  /* blue */
-			fwrite(color, 1, 3, fp);
-		}
-	}
-	fclose(fp);
-}
-void dbgPGM(int w, int h, u32* pixels, const char* prefix = "dbg") { // 1 component
-	char fn[32];
-	snprintf(fn, 32, "%s%04d.pgm", prefix, g_imgCount++);
-	FILE *fp = fopen(fn, "wb");
-	fprintf(fp, "P5\n%d %d\n65536\n", w, h);
-	for (int j = 0; j < h; ++j) {
-		for (int i = 0; i < w; ++i) {
-			fwrite((pixels + (j*w + i)), 1, 2, fp);
-		}
-	}
-	fclose(fp);
-}
-
-#endif
 
 }
 
@@ -595,7 +547,7 @@ TextureScalerCommon::TextureScalerCommon() {
 TextureScalerCommon::~TextureScalerCommon() {
 }
 
-bool TextureScalerCommon::IsEmptyOrFlat(const u32 *data, int pixels) const {
+bool TextureScalerCommon::IsEmptyOrFlat(const u32 *data, int pixels) {
 	u32 ref = data[0];
 	// TODO: SIMD-ify this (although, for most textures we'll get out very early)
 	for (int i = 1; i < pixels; ++i) {
@@ -658,7 +610,7 @@ bool TextureScalerCommon::ScaleInto(u32 *outputBuf, u32 *src, int width, int hei
 		ScaleHybrid(factor, inputBuf, outputBuf, width, height, true);
 		break;
 	default:
-		ERROR_LOG(G3D, "Unknown scaling type: %d", g_Config.iTexScalingType);
+		ERROR_LOG(Log::G3D, "Unknown scaling type: %d", g_Config.iTexScalingType);
 	}
 
 	// update values accordingly
@@ -668,7 +620,7 @@ bool TextureScalerCommon::ScaleInto(u32 *outputBuf, u32 *src, int width, int hei
 #ifdef SCALING_MEASURE_TIME
 	if (*scaledWidth* *scaledHeight > 64 * 64 * factor*factor) {
 		double t = time_now_d() - t_start;
-		NOTICE_LOG(G3D, "TextureScaler: processed %9d pixels in %6.5lf seconds. (%9.2lf Mpixels/second)",
+		NOTICE_LOG(Log::G3D, "TextureScaler: processed %9d pixels in %6.5lf seconds. (%9.2lf Mpixels/second)",
 			*scaledWidth * *scaledHeight, t, (*scaledWidth * *scaledHeight) / (t * 1000 * 1000));
 	}
 #endif
@@ -680,7 +632,7 @@ bool TextureScalerCommon::Scale(u32* &data, int width, int height, int *scaledWi
 	// prevent processing empty or flat textures (this happens a lot in some games)
 	// doesn't hurt the standard case, will be very quick for textures with actual texture
 	if (IsEmptyOrFlat(data, width*height)) {
-		DEBUG_LOG(G3D, "TextureScaler: early exit -- empty/flat texture");
+		DEBUG_LOG(Log::G3D, "TextureScaler: early exit -- empty/flat texture");
 		return false;
 	}
 
@@ -723,7 +675,7 @@ void TextureScalerCommon::ScaleHybrid(int factor, u32* source, u32* dest, int wi
 	// 3) output = A*C + B*(1-C)
 
 	const static int KERNEL_SPLAT[3][3] = {
-			{ 1, 1, 1 }, { 1, 1, 1 }, { 1, 1, 1 }
+		{ 1, 1, 1 }, { 1, 1, 1 }, { 1, 1, 1 }
 	};
 
 	bufTmp1.resize(width*height);

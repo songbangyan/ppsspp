@@ -48,6 +48,25 @@ std::set<std::string> g_seenPads;
 std::map<InputDeviceID, std::string> g_padNames;
 std::set<InputDeviceID> g_seenDeviceIds;
 
+AxisType GetAxisType(InputAxis input) {
+	switch (input) {
+	case JOYSTICK_AXIS_GAS:
+	case JOYSTICK_AXIS_BRAKE:
+	case JOYSTICK_AXIS_LTRIGGER:
+	case JOYSTICK_AXIS_RTRIGGER:
+		return AxisType::TRIGGER;
+	case JOYSTICK_AXIS_X:
+	case JOYSTICK_AXIS_Y:
+	case JOYSTICK_AXIS_Z:
+	case JOYSTICK_AXIS_RX:
+	case JOYSTICK_AXIS_RY:
+	case JOYSTICK_AXIS_RZ:
+		return AxisType::STICK;
+	default:
+		return AxisType::OTHER;
+	}
+}
+
 // Utility for UI navigation
 void SingleInputMappingFromPspButton(int btn, std::vector<InputMapping> *mappings, bool ignoreMouse) {
 	std::vector<MultiInputMapping> multiMappings;
@@ -57,7 +76,7 @@ void SingleInputMappingFromPspButton(int btn, std::vector<InputMapping> *mapping
 		if (!mapping.empty()) {
 			mappings->push_back(mapping.mappings[0]);
 		} else {
-			WARN_LOG(COMMON, "Encountered empty mapping in multi-mapping for button %d", btn);
+			WARN_LOG(Log::Common, "Encountered empty mapping in multi-mapping for button %d", btn);
 		}
 	}
 }
@@ -329,20 +348,12 @@ static const KeyMap_IntStrPair key_names[] = {
 	{NKCODE_EXT_MOUSEWHEEL_UP, "MWheelU"},
 	{NKCODE_EXT_MOUSEWHEEL_DOWN, "MWheelD"},
 
-
-	{NKCODE_EXT_MOTION_UP, "MotionUp"},
-	{NKCODE_EXT_MOTION_DOWN, "MotionDown"},
-	{NKCODE_EXT_MOTION_LEFT, "MotionLeft"},
-	{NKCODE_EXT_MOTION_RIGHT, "MotionRight"},
-	{NKCODE_EXT_MOTION_FORWARD, "MotionFwd"},
-	{NKCODE_EXT_ROTATION_UP, "RotationUp"},
-	{NKCODE_EXT_ROTATION_DOWN, "RotationDown"},
-	{NKCODE_EXT_ROTATION_LEFT, "RotationLeft"},
-	{NKCODE_EXT_ROTATION_RIGHT, "RotationRight"},
-
 	{NKCODE_START_QUESTION, "¿"},
 	{NKCODE_LEFTBRACE, "{"},
 	{NKCODE_RIGHTBRACE, "}"},
+
+	{NKCODE_GUIDE, "Guide"},
+	{NKCODE_INFO, "Info"},
 };
 
 static const KeyMap_IntStrPair axis_names[] = {
@@ -407,11 +418,14 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_AXIS_SWAP, "AxisSwap"},
 
 	{VIRTKEY_FASTFORWARD, "Fast-forward"},
+	{VIRTKEY_PAUSE, "Pause"},
+	{VIRTKEY_PAUSE_NO_MENU, "Pause (no menu)"},
+
 	{VIRTKEY_SPEED_TOGGLE, "SpeedToggle"},
 	{VIRTKEY_SPEED_CUSTOM1, "Alt speed 1"},
 	{VIRTKEY_SPEED_CUSTOM2, "Alt speed 2"},
 	{VIRTKEY_SPEED_ANALOG, "Analog speed"},
-	{VIRTKEY_PAUSE, "Pause"},
+	{VIRTKEY_RESET_EMULATION, "Reset"},
 	{VIRTKEY_FRAME_ADVANCE, "Frame Advance"},
 #if !defined(MOBILE_DEVICE)
 	{VIRTKEY_RECORD, "Audio/Video Recording" },
@@ -424,6 +438,7 @@ const KeyMap_IntStrPair psp_button_names[] = {
 #if !defined(MOBILE_DEVICE)
 	{VIRTKEY_TOGGLE_FULLSCREEN, "Toggle Fullscreen"},
 #endif
+	{VIRTKEY_TOGGLE_DEBUGGER, "Toggle Debugger"},
 
 	{VIRTKEY_OPENCHAT, "OpenChat" },
 
@@ -446,6 +461,9 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{VIRTKEY_TOGGLE_WLAN, "Toggle WLAN"},
 	{VIRTKEY_EXIT_APP, "Exit App"},
 
+	{VIRTKEY_TOGGLE_MOUSE, "Toggle mouse input"},
+	{VIRTKEY_TOGGLE_TOUCH_CONTROLS, "Toggle touch controls"},
+
 	{VIRTKEY_AXIS_RIGHT_Y_MAX, "RightAn.Up"},
 	{VIRTKEY_AXIS_RIGHT_Y_MIN, "RightAn.Down"},
 	{VIRTKEY_AXIS_RIGHT_X_MIN, "RightAn.Left"},
@@ -459,6 +477,10 @@ const KeyMap_IntStrPair psp_button_names[] = {
 	{CTRL_VOL_DOWN, "Vol -"},
 	{CTRL_SCREEN, "Screen"},
 	{CTRL_NOTE, "Note"},
+	{CTRL_L2, "Dev-kit L2"},
+	{CTRL_L3, "Dev-kit L3"},
+	{CTRL_R2, "Dev-kit R2"},
+	{CTRL_R3, "Dev-kit R3"},
 };
 
 // key here can be other things than InputKeyCode.
@@ -531,12 +553,16 @@ bool InputMappingsFromPspButtonNoLock(int btn, std::vector<MultiInputMapping> *m
 		return false;
 	}
 	bool mapped = false;
-	mappings->clear();
+	if (mappings) {
+		mappings->clear();
+	}
 	for (auto &iter2 : iter->second) {
 		bool ignore = ignoreMouse && iter2.HasMouse();
-		if (mappings && !ignore) {
+		if (!ignore) {
 			mapped = true;
-			mappings->push_back(iter2);
+			if (mappings) {
+				mappings->push_back(iter2);
+			}
 		}
 	}
 	return mapped;
@@ -711,10 +737,12 @@ void RestoreDefault() {
 	} else if (IsMOQII7S(name)) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_MOQI_I7S, false);
 	} else if (IsRetroid(name)) {
-		SetDefaultKeyMap(DEFAULT_MAPPING_RETRO_STATION_CONTROLLER, false);
+		SetDefaultKeyMap(DEFAULT_MAPPING_RETROID_CONTROLLER, false);
 	} else {
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_PAD, false);
 	}
+#elif PPSSPP_PLATFORM(IOS)
+	SetDefaultKeyMap(DEFAULT_MAPPING_IOS_PAD, false);
 #else
 	SetDefaultKeyMap(DEFAULT_MAPPING_KEYBOARD, true);
 	SetDefaultKeyMap(DEFAULT_MAPPING_PAD, false);
@@ -824,13 +852,13 @@ void AutoConfForPad(const std::string &name) {
 	std::lock_guard<std::recursive_mutex> guard(g_controllerMapLock);
 	g_controllerMap.clear();
 
-	INFO_LOG(SYSTEM, "Autoconfiguring pad for '%s'", name.c_str());
+	INFO_LOG(Log::System, "Autoconfiguring pad for '%s'", name.c_str());
 
 #if PPSSPP_PLATFORM(ANDROID)
 	if (name.find("Xbox") != std::string::npos) {
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_XBOX, false);
 	} else if (name == "Retro Station Controller") {
-		SetDefaultKeyMap(DEFAULT_MAPPING_RETRO_STATION_CONTROLLER, false);
+		SetDefaultKeyMap(DEFAULT_MAPPING_RETROID_CONTROLLER, false);
 	} else {
 		SetDefaultKeyMap(DEFAULT_MAPPING_ANDROID_PAD, false);
 	}
@@ -874,7 +902,7 @@ bool HasChanged(int &prevGeneration) {
 	return false;
 }
 
-static const char *g_vKeyNames[] = {
+static const char * const g_vKeyNames[] = {
 	"AXIS_X_MIN",
 	"AXIS_Y_MIN",
 	"AXIS_X_MAX",

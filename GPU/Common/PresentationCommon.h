@@ -104,6 +104,11 @@ public:
 	bool PresentedThisFrame() const {
 		return presentedThisFrame_;
 	}
+	void NotifyPresent() {
+		// Something else did the present, skipping PresentationCommon.
+		// If you haven't called BindFramebufferAsRenderTarget, you must not set this.
+		presentedThisFrame_ = true;
+	}
 
 	void DeviceLost();
 	void DeviceRestore(Draw::DrawContext *draw);

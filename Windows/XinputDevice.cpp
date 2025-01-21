@@ -13,6 +13,7 @@
 #include "XinputDevice.h"
 #include "Core/Config.h"
 #include "Core/Core.h"
+#include "Core/System.h"
 #include "Core/KeyMap.h"
 #include "Core/HLE/sceCtrl.h"
 
@@ -20,13 +21,16 @@
 
 #if !PPSSPP_PLATFORM(UWP)
 
+#ifndef __MINGW32__
 struct XINPUT_CAPABILITIES_EX {
 	XINPUT_CAPABILITIES Capabilities;
-	WORD vendorId;
-	WORD productId;
-	WORD revisionId;
-	DWORD a4; //unknown
+	WORD VendorId;
+	WORD ProductId;
+	WORD VersionNumber;
+	WORD  unk1;
+	DWORD unk2;
 };
+#endif
 
 typedef DWORD (WINAPI *XInputGetState_t) (DWORD dwUserIndex, XINPUT_STATE* pState);
 typedef DWORD (WINAPI *XInputSetState_t) (DWORD dwUserIndex, XINPUT_VIBRATION* pVibration);
@@ -144,7 +148,7 @@ static const struct { int from; InputKeyCode to; } xinput_ctrl_map[] = {
 
 XinputDevice::XinputDevice() {
 	if (LoadXInputDLL() != 0) {
-		WARN_LOG(SCECTRL, "Failed to load XInput! DLL missing");
+		WARN_LOG(Log::sceCtrl, "Failed to load XInput! DLL missing");
 	}
 
 	for (size_t i = 0; i < ARRAY_SIZE(check_delay); ++i) {
@@ -188,7 +192,7 @@ void XinputDevice::UpdatePad(int pad, const XINPUT_STATE &state, XINPUT_VIBRATIO
 #if !PPSSPP_PLATFORM(UWP)
 		XINPUT_CAPABILITIES_EX caps{};
 		if (PPSSPP_XInputGetCapabilitiesEx != nullptr && PPSSPP_XInputGetCapabilitiesEx(1, pad, 0, &caps) == ERROR_SUCCESS) {
-			KeyMap::NotifyPadConnected(DEVICE_ID_XINPUT_0 + pad, StringFromFormat("Xbox 360 Pad: %d/%d", caps.vendorId, caps.productId));
+			KeyMap::NotifyPadConnected(DEVICE_ID_XINPUT_0 + pad, StringFromFormat("Xbox 360 Pad: %d/%d", caps.VendorId, caps.ProductId));
 		} else {
 #else
 		{
@@ -252,7 +256,6 @@ void XinputDevice::ApplyButtons(int pad, const XINPUT_STATE &state) {
 		}
 	}
 }
-
 
 void XinputDevice::ApplyVibration(int pad, XINPUT_VIBRATION &vibration) {
 	if (PSP_IsInited()) {

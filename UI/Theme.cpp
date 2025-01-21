@@ -25,7 +25,7 @@
 #include "Common/File/VFS/VFS.h"
 #include "Common/Data/Format/IniFile.h"
 #include "Common/File/DirListing.h"
-#include "Common/LogManager.h"
+#include "Common/Log/LogManager.h"
 
 #include "Core/Config.h"
 
@@ -114,6 +114,11 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 			// Alright, let's loop through the sections and see if any is a theme.
 			for (size_t i = 0; i < ini.Sections().size(); i++) {
 				Section &section = *(ini.Sections()[i].get());
+
+				if (section.name().empty()) {
+					continue;
+				}
+
 				ThemeInfo info;
 				section.Get("Name", &info.name, section.name().c_str());
 
@@ -135,14 +140,20 @@ static void LoadThemeInfo(const std::vector<Path> &directories) {
 				std::string tmpPath;
 				section.Get("UIAtlas", &tmpPath, "");
 				if (!tmpPath.empty()) {
-					tmpPath = (path / tmpPath).ToString();
-
-					File::FileInfo tmpInfo;
-					if (g_VFS.GetFileInfo((tmpPath + ".meta").c_str(), &tmpInfo) && g_VFS.GetFileInfo((tmpPath + ".zim").c_str(), &tmpInfo)) {
-						info.sUIAtlas = tmpPath;
+					if (tmpPath == "../ui_atlas") {
+						// Do nothing.
+					} else {
+						// WARNING: Note that the below appears to be entirely broken. ..-navigation doesn't work on zip VFS.
+						INFO_LOG(Log::System, "Checking %s", tmpPath.c_str());
+						tmpPath = (path / tmpPath).ToString();
+						if (g_VFS.Exists((tmpPath + ".meta").c_str()) && g_VFS.Exists((tmpPath + ".zim").c_str())) {
+							// INFO_LOG(Log::System, "%s exists", tmpPath.c_str());
+							info.sUIAtlas = tmpPath;
+						} else {
+							INFO_LOG(Log::System, "%s.meta/zim doesn't exist, not overriding atlas", tmpPath.c_str());
+						}
 					}
 				}
-
 				appendTheme(info);
 			}
 		}
@@ -162,9 +173,9 @@ static void LoadAtlasMetadata(Atlas &metadata, const char *filename, bool requir
 	bool load_success = atlas_data != nullptr && metadata.Load(atlas_data, atlas_data_size);
 	if (!load_success) {
 		if (required)
-			ERROR_LOG(G3D, "Failed to load %s - graphics will be broken", filename);
+			ERROR_LOG(Log::G3D, "Failed to load %s - graphics will be broken", filename);
 		else
-			WARN_LOG(G3D, "Failed to load %s", filename);
+			WARN_LOG(Log::G3D, "Failed to load %s", filename);
 		// Stumble along with broken visuals instead of dying...
 	}
 	delete[] atlas_data;
@@ -192,11 +203,11 @@ void UpdateTheme(UIContext *ctx) {
 #if defined(USING_WIN_UI) || PPSSPP_PLATFORM(UWP) || defined(USING_QT_UI)
 	ui_theme.uiFont = UI::FontStyle(FontID("UBUNTU24"), g_Config.sFont.c_str(), 22);
 	ui_theme.uiFontSmall = UI::FontStyle(FontID("UBUNTU24"), g_Config.sFont.c_str(), 17);
-	ui_theme.uiFontSmaller = UI::FontStyle(FontID("UBUNTU24"), g_Config.sFont.c_str(), 13);
+	ui_theme.uiFontBig = UI::FontStyle(FontID("UBUNTU24"), g_Config.sFont.c_str(), 28);
 #else
 	ui_theme.uiFont = UI::FontStyle(FontID("UBUNTU24"), "", 20);
 	ui_theme.uiFontSmall = UI::FontStyle(FontID("UBUNTU24"), "", 15);
-	ui_theme.uiFontSmaller = UI::FontStyle(FontID("UBUNTU24"), "", 12);
+	ui_theme.uiFontBig = UI::FontStyle(FontID("UBUNTU24"), "", 26);
 #endif
 
 	ui_theme.checkOn = ImageID("I_CHECKEDBOX");

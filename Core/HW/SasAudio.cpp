@@ -25,10 +25,8 @@
 #include "Core/Config.h"
 #include "Core/Reporting.h"
 #include "Core/Util/AudioFormat.h"
-#include "Core/Core.h"
+#include "Core/System.h"
 #include "SasAudio.h"
-
-// #define AUDIO_TO_FILE
 
 static const u8 f[16][2] = {
 	{   0,   0 },
@@ -79,7 +77,7 @@ void VagDecoder::DecodeBlock(const u8 *&read_pointer) {
 	predict_nr >>= 4;
 	int flags = *readp++;
 	if (flags == 7) {
-		VERBOSE_LOG(SASMIX, "VAG ending block at %d", curBlock_);
+		VERBOSE_LOG(Log::SasMix, "VAG ending block at %d", curBlock_);
 		end_ = true;
 		return;
 	}
@@ -124,7 +122,7 @@ void VagDecoder::GetSamples(s16 *outSamples, int numSamples) {
 		return;
 	}
 	if (!Memory::IsValidRange(read_, numBlocks_ * 16)) {
-		WARN_LOG_REPORT(SASMIX, "Bad VAG samples address? %08x / %d", read_, numBlocks_);
+		WARN_LOG_REPORT(Log::SasMix, "Bad VAG samples address? %08x / %d", read_, numBlocks_);
 		return;
 	}
 
@@ -134,7 +132,7 @@ void VagDecoder::GetSamples(s16 *outSamples, int numSamples) {
 	for (int i = 0; i < numSamples; i++) {
 		if (curSample == 28) {
 			if (loopAtNextBlock_) {
-				VERBOSE_LOG(SASMIX, "Looping VAG from block %d/%d to %d", curBlock_, numBlocks_, loopStartBlock_);
+				VERBOSE_LOG(Log::SasMix, "Looping VAG from block %d/%d to %d", curBlock_, numBlocks_, loopStartBlock_);
 				// data_ starts at curBlock = -1.
 				read_ = data_ + 16 * loopStartBlock_ + 16;
 				readp = Memory::GetPointerUnchecked(read_);
@@ -192,7 +190,7 @@ void VagDecoder::DoState(PointerWrap &p) {
 
 int SasAtrac3::setContext(u32 context) {
 	contextAddr_ = context;
-	atracID_ = _AtracGetIDByContext(context);
+	atracID_ = AtracSasGetIDByContext(context);
 	if (!sampleQueue_)
 		sampleQueue_ = new BufferQueue();
 	sampleQueue_->clear();
@@ -211,7 +209,7 @@ void SasAtrac3::getNextSamples(s16 *outbuf, int wantedSamples) {
 		u32 numSamples = 0;
 		int remains = 0;
 		static s16 buf[0x800];
-		_AtracDecodeData(atracID_, (u8*)buf, 0, &numSamples, &finish, &remains);
+		AtracSasDecodeData(atracID_, (u8*)buf, 0, &numSamples, &finish, &remains);
 		if (numSamples > 0)
 			sampleQueue_->push((u8*)buf, numSamples * sizeof(s16));
 		else
@@ -223,7 +221,7 @@ void SasAtrac3::getNextSamples(s16 *outbuf, int wantedSamples) {
 
 int SasAtrac3::addStreamData(u32 bufPtr, u32 addbytes) {
 	if (atracID_ > 0) {
-		_AtracAddStreamData(atracID_, bufPtr, addbytes);
+		AtracSasAddStreamData(atracID_, bufPtr, addbytes);
 	}
 	return 0;
 }
@@ -364,14 +362,11 @@ void ADSREnvelope::SetSimpleEnvelope(u32 ADSREnv1, u32 ADSREnv2) {
 	}
 
 	if (attackRate < 0 || decayRate < 0 || sustainRate < 0 || releaseRate < 0) {
-		ERROR_LOG_REPORT(SASMIX, "Simple ADSR resulted in invalid rates: %04x, %04x", ADSREnv1, ADSREnv2);
+		ERROR_LOG_REPORT(Log::SasMix, "Simple ADSR resulted in invalid rates: %04x, %04x", ADSREnv1, ADSREnv2);
 	}
 }
 
 SasInstance::SasInstance() {
-#ifdef AUDIO_TO_FILE
-	audioDump = fopen("D:\\audio.raw", "wb");
-#endif
 	memset(&waveformEffect, 0, sizeof(waveformEffect));
 	waveformEffect.type = PSP_SAS_EFFECT_TYPE_OFF;
 	waveformEffect.isDryOn = 1;
@@ -558,7 +553,7 @@ void SasInstance::MixVoice(SasVoice &voice) {
 		u32 sampleFrac = voice.sampleFrac;
 		int samplesToRead = (sampleFrac + voicePitch * std::max(0, grainSize - delay)) >> PSP_SAS_PITCH_BASE_SHIFT;
 		if (samplesToRead > ARRAY_SIZE(mixTemp_) - 2) {
-			ERROR_LOG(SCESAS, "Too many samples to read (%d)! This shouldn't happen.", samplesToRead);
+			ERROR_LOG(Log::sceSas, "Too many samples to read (%d)! This shouldn't happen.", samplesToRead);
 			samplesToRead = ARRAY_SIZE(mixTemp_) - 2;
 		}
 		int readPos = 2;
@@ -614,7 +609,7 @@ void SasInstance::MixVoice(SasVoice &voice) {
 		if (voice.HaveSamplesEnded())
 			voice.envelope.End();
 		if (voice.envelope.HasEnded()) {
-			// NOTICE_LOG(SASMIX, "Hit end of envelope");
+			// NOTICE_LOG(Log::SasMix, "Hit end of envelope");
 			voice.playing = false;
 			voice.on = false;
 		}
@@ -635,7 +630,7 @@ void SasInstance::Mix(u32 outAddr, u32 inAddr, int leftVol, int rightVol) {
 	s16 *outp = (s16 *)Memory::GetPointerWriteRange(outAddr, 4 * grainSize);
 	const s16 *inp = inAddr ? (const s16 *)Memory::GetPointerRange(inAddr, 4 * grainSize) : 0;
 	if (!outp) {
-		WARN_LOG_REPORT(SCESAS, "Bad SAS Mix output address: %08x, grain=%d", outAddr, grainSize);
+		WARN_LOG_REPORT(Log::sceSas, "Bad SAS Mix output address: %08x, grain=%d", outAddr, grainSize);
 	} else if (outputMode == PSP_SAS_OUTPUTMODE_MIXED) {
 		// Okay, apply effects processing to the Send buffer.
 		WriteMixedOutput(outp, inp, leftVol, rightVol);
@@ -649,7 +644,7 @@ void SasInstance::Mix(u32 outAddr, u32 inAddr, int leftVol, int rightVol) {
 		s16 *outpR = outp + grainSize * 1;
 		s16 *outpSendL = outp + grainSize * 2;
 		s16 *outpSendR = outp + grainSize * 3;
-		WARN_LOG_REPORT_ONCE(sasraw, SASMIX, "sceSasCore: raw outputMode");
+		WARN_LOG_REPORT_ONCE(sasraw, Log::SasMix, "sceSasCore: raw outputMode");
 		for (int i = 0; i < grainSize * 2; i += 2) {
 			*outpL++ = clamp_s16(mixBuffer[i + 0]);
 			*outpR++ = clamp_s16(mixBuffer[i + 1]);
@@ -660,10 +655,6 @@ void SasInstance::Mix(u32 outAddr, u32 inAddr, int leftVol, int rightVol) {
 	}
 	memset(mixBuffer, 0, grainSize * sizeof(int) * 2);
 	memset(sendBuffer, 0, grainSize * sizeof(int) * 2);
-
-#ifdef AUDIO_TO_FILE
-	fwrite(Memory::GetPointer(outAddr, grainSize * 2 * 2), 1, grainSize * 2 * 2, audioDump);
-#endif
 }
 
 void SasInstance::WriteMixedOutput(s16 *outp, const s16 *inp, int leftVol, int rightVol) {
@@ -776,7 +767,7 @@ void SasInstance::DoState(PointerWrap &p) {
 	int n = PSP_SAS_VOICES_MAX;
 	Do(p, n);
 	if (n != PSP_SAS_VOICES_MAX) {
-		ERROR_LOG(SAVESTATE, "Wrong number of SAS voices");
+		ERROR_LOG(Log::SaveState, "Wrong number of SAS voices");
 		return;
 	}
 	DoArray(p, voices, ARRAY_SIZE(voices));
@@ -798,7 +789,7 @@ void SasVoice::KeyOn() {
 		if (Memory::IsValidAddress(vagAddr)) {
 			vag.Start(vagAddr, vagSize, loop);
 		} else {
-			ERROR_LOG(SASMIX, "Invalid VAG address %08x", vagAddr);
+			ERROR_LOG(Log::SasMix, "Invalid VAG address %08x", vagAddr);
 			return;
 		}
 		break;

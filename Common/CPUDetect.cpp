@@ -32,10 +32,10 @@
 #include <sys/sysctl.h>
 #endif
 
-#include <algorithm>
 #include <cstdint>
 #include <memory.h>
 #include <set>
+#include <algorithm>
 
 #include "Common/Common.h"
 #include "Common/CPUDetect.h"
@@ -62,16 +62,7 @@ void do_cpuid(u32 regs[4], u32 cpuid_leaf) {
 	__cpuid((int *)regs, cpuid_leaf);
 }
 
-#ifdef __MINGW32__
-static uint64_t do_xgetbv(unsigned int index) {
-	unsigned int eax, edx;
-	// This is xgetbv directly, so we can avoid compilers warning we need runtime checks.
-	asm(".byte 0x0f, 0x01, 0xd0" : "=a"(eax), "=d"(edx) : "c"(index));
-	return ((uint64_t)edx << 32) | eax;
-}
-#else
 #define do_xgetbv _xgetbv
-#endif
 
 #else  // _WIN32
 
@@ -126,7 +117,7 @@ static std::vector<int> ParseCPUList(const std::string &filename) {
 	std::string data;
 	std::vector<int> results;
 
-	if (File::ReadFileToString(true, Path(filename), data)) {
+	if (File::ReadSysTextFileToString(Path(filename), &data)) {
 		std::vector<std::string> ranges;
 		SplitString(data, ',', ranges);
 		for (auto range : ranges) {
@@ -542,3 +533,29 @@ std::string CPUInfo::Summarize() {
 }
 
 #endif // PPSSPP_ARCH(X86) || PPSSPP_ARCH(AMD64)
+
+const char *GetCompilerABI() {
+#if PPSSPP_ARCH(ARMV7)
+	return "armeabi-v7a";
+#elif PPSSPP_ARCH(ARM64)
+	return "arm64";
+#elif PPSSPP_ARCH(X86)
+	return "x86";
+#elif PPSSPP_ARCH(AMD64)
+	return "x86-64";
+#elif PPSSPP_ARCH(RISCV64)
+    //https://github.com/riscv/riscv-toolchain-conventions#cc-preprocessor-definitions
+    //https://github.com/riscv/riscv-c-api-doc/blob/master/riscv-c-api.md#abi-related-preprocessor-definitions
+    #if defined(__riscv_float_abi_single)
+        return "lp64f";
+    #elif defined(__riscv_float_abi_double)
+        return "lp64d";
+    #elif defined(__riscv_float_abi_quad)
+        return "lp64q";
+    #elif defined(__riscv_float_abi_soft)
+        return "lp64";
+    #endif
+#else
+	return "other";
+#endif
+}

@@ -17,10 +17,10 @@
 
 #include <mutex>
 #include <condition_variable>
+
 #include "Common/Thread/ThreadUtil.h"
 #include "Core/Debugger/WebSocket.h"
 #include "Core/Debugger/WebSocket/WebSocketUtils.h"
-#include "Core/MemMap.h"
 
 // This WebSocket (connected through the same port as disc sharing) allows API/debugger access to PPSSPP.
 // Currently, the only subprotocol "debugger.ppsspp.org" uses a simple JSON based interface.
@@ -108,7 +108,7 @@ static void WebSocketNotifyLifecycle(CoreLifecycle stage) {
 	case CoreLifecycle::STOPPING:
 	case CoreLifecycle::MEMORY_REINITING:
 		if (debuggersConnected > 0) {
-			DEBUG_LOG(SYSTEM, "Waiting for debugger to complete on shutdown");
+			DEBUG_LOG(Log::System, "Waiting for debugger to complete on shutdown");
 		}
 		lifecycleLock.lock();
 		break;
@@ -118,7 +118,7 @@ static void WebSocketNotifyLifecycle(CoreLifecycle stage) {
 	case CoreLifecycle::MEMORY_REINITED:
 		lifecycleLock.unlock();
 		if (debuggersConnected > 0) {
-			DEBUG_LOG(SYSTEM, "Debugger ready for shutdown");
+			DEBUG_LOG(Log::System, "Debugger ready for shutdown");
 		}
 		break;
 	}
@@ -165,7 +165,7 @@ void HandleDebuggerRequest(const http::ServerRequest &request) {
 		}
 
 		const JsonGet root = reader.root();
-		const char *event = root ? root.getString("event", nullptr) : nullptr;
+		const char *event = root ? root.getStringOr("event", nullptr) : nullptr;
 		if (!event) {
 			ws->Send(DebuggerErrorEvent("Bad message: no event property", LogLevel::LERROR, root));
 			return;

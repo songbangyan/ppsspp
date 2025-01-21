@@ -50,12 +50,12 @@ private:
 	UI::ChoiceStrip *mode_ = nullptr;
 	UI::Choice *postProcChoice_ = nullptr;
 	std::string shaderNames_[256];
-	std::deque<bool> settingsVisible_;  // vector<bool> is an insane bitpacked specialization!
+	std::deque<bool> settingsVisible_;  // vector<bool> is an insane bitpacked specialization! Not to be used with checkboxes!
 };
 
 class PostProcScreen : public UI::ListPopupScreen {
 public:
-	PostProcScreen(const std::string &title, int id, bool showStereoShaders) 
+	PostProcScreen(std::string_view title, int id, bool showStereoShaders)
 		: ListPopupScreen(title), id_(id), showStereoShaders_(showStereoShaders) { }
 
 	void CreateViews() override;

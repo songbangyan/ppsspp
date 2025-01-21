@@ -22,8 +22,9 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 #include "Common/Swap.h"
+#include "Common/File/Path.h"
 #include "Core/ELF/ParamSFO.h"
-#include "Core/Core.h"
+#include "Core/System.h"
 
 struct Header
 {
@@ -62,24 +63,28 @@ void ParamSFOData::SetValue(const std::string &key, const u8 *value, unsigned in
 
 int ParamSFOData::GetValueInt(const std::string &key) const {
 	std::map<std::string,ValueData>::const_iterator it = values.find(key);
-	if(it == values.end() || it->second.type != VT_INT)
+	if (it == values.end() || it->second.type != VT_INT)
 		return 0;
 	return it->second.i_value;
 }
 
 std::string ParamSFOData::GetValueString(const std::string &key) const {
 	std::map<std::string,ValueData>::const_iterator it = values.find(key);
-	if(it == values.end() || (it->second.type != VT_UTF8))
+	if (it == values.end() || (it->second.type != VT_UTF8))
 		return "";
 	return it->second.s_value;
 }
 
+bool ParamSFOData::HasKey(const std::string &key) const {
+	return values.find(key) != values.end();
+}
+
 const u8 *ParamSFOData::GetValueData(const std::string &key, unsigned int *size) const {
 	std::map<std::string,ValueData>::const_iterator it = values.find(key);
-	if(it == values.end() || (it->second.type != VT_UTF8_SPE))
+	if (it == values.end() || (it->second.type != VT_UTF8_SPE)) {
 		return 0;
-	if(size)
-	{
+	}
+	if (size) {
 		*size = it->second.u_size;
 	}
 	return it->second.u_value;
@@ -96,8 +101,8 @@ std::vector<std::string> ParamSFOData::GetKeys() const {
 std::string ParamSFOData::GetDiscID() {
 	const std::string discID = GetValueString("DISC_ID");
 	if (discID.empty()) {
-		std::string fakeID = GenerateFakeID();
-		WARN_LOG(LOADER, "No DiscID found - generating a fake one: '%s' (from %s)", fakeID.c_str(), PSP_CoreParameter().fileToStart.c_str());
+		std::string fakeID = GenerateFakeID(Path());
+		WARN_LOG(Log::Loader, "No DiscID found - generating a fake one: '%s' (from %s)", fakeID.c_str(), PSP_CoreParameter().fileToStart.c_str());
 		ValueData data;
 		data.type = VT_UTF8;
 		data.s_value = fakeID;
@@ -115,7 +120,7 @@ bool ParamSFOData::ReadSFO(const u8 *paramsfo, size_t size) {
 	if (header->magic != 0x46535000)
 		return false;
 	if (header->version != 0x00000101)
-		WARN_LOG(LOADER, "Unexpected SFO header version: %08x", header->version);
+		WARN_LOG(Log::Loader, "Unexpected SFO header version: %08x", header->version);
 
 	const IndexTable *indexTables = (const IndexTable *)(paramsfo + sizeof(Header));
 
@@ -165,7 +170,7 @@ bool ParamSFOData::ReadSFO(const u8 *paramsfo, size_t size) {
 				// Unsigned int
 				const u32_le *data = (const u32_le *)(paramsfo + data_offset);
 				SetValue(key, *data, indexTables[i].param_max_len);
-				VERBOSE_LOG(LOADER, "%s %08x", key.c_str(), *data);
+				VERBOSE_LOG(Log::Loader, "%s %08x", key.c_str(), *data);
 			}
 			break;
 		case 0x0004:
@@ -174,7 +179,7 @@ bool ParamSFOData::ReadSFO(const u8 *paramsfo, size_t size) {
 				if (data_offset + indexTables[i].param_len > size)
 					continue;
 				const u8 *utfdata = (const u8 *)(paramsfo + data_offset);
-				VERBOSE_LOG(LOADER, "%s %s", key.c_str(), utfdata);
+				VERBOSE_LOG(Log::Loader, "%s %s", key.c_str(), utfdata);
 				SetValue(key, utfdata, indexTables[i].param_len, indexTables[i].param_max_len);
 			}
 			break;
@@ -183,7 +188,7 @@ bool ParamSFOData::ReadSFO(const u8 *paramsfo, size_t size) {
 			{
 				// TODO: Likely should use param_len here, but there's gotta be a reason we avoided it before.
 				std::string str = readStringCapped(data_offset, indexTables[i].param_max_len);
-				VERBOSE_LOG(LOADER, "%s %s", key.c_str(), str.c_str());
+				VERBOSE_LOG(Log::Loader, "%s %s", key.c_str(), str.c_str());
 				SetValue(key, str, indexTables[i].param_max_len);
 			}
 			break;
@@ -195,12 +200,12 @@ bool ParamSFOData::ReadSFO(const u8 *paramsfo, size_t size) {
 	return true;
 }
 
-int ParamSFOData::GetDataOffset(const u8 *paramsfo, const std::string &dataName) {
+int ParamSFOData::GetDataOffset(const u8 *paramsfo, const char *dataName) {
 	const Header *header = (const Header *)paramsfo;
 	if (header->magic != 0x46535000)
 		return -1;
 	if (header->version != 0x00000101)
-		WARN_LOG(LOADER, "Unexpected SFO header version: %08x", header->version);
+		WARN_LOG(Log::Loader, "Unexpected SFO header version: %08x", header->version);
 
 	const IndexTable *indexTables = (const IndexTable *)(paramsfo + sizeof(Header));
 
@@ -210,7 +215,7 @@ int ParamSFOData::GetDataOffset(const u8 *paramsfo, const std::string &dataName)
 	for (u32 i = 0; i < header->index_table_entries; i++)
 	{
 		const char *key = (const char *)(key_start + indexTables[i].key_table_offset);
-		if (!strcmp(key, dataName.c_str()))
+		if (!strcmp(key, dataName))
 		{
 			return data_start + indexTables[i].data_table_offset;
 		}
@@ -219,7 +224,7 @@ int ParamSFOData::GetDataOffset(const u8 *paramsfo, const std::string &dataName)
 	return -1;
 }
 
-bool ParamSFOData::WriteSFO(u8 **paramsfo, size_t *size) const {
+void ParamSFOData::WriteSFO(u8 **paramsfo, size_t *size) const {
 	size_t total_size = 0;
 	size_t key_size = 0;
 	size_t data_size = 0;
@@ -232,10 +237,10 @@ bool ParamSFOData::WriteSFO(u8 **paramsfo, size_t *size) const {
 	total_size += sizeof(Header);
 
 	// Get size info
-	for (auto it = values.begin(); it != values.end(); ++it)
+	for (const auto &[k, v] : values)
 	{
-		key_size += it->first.size()+1;
-		data_size += it->second.max_size;
+		key_size += k.size() + 1;
+		data_size += v.max_size;
 
 		header.index_table_entries++;
 	}
@@ -251,9 +256,10 @@ bool ParamSFOData::WriteSFO(u8 **paramsfo, size_t *size) const {
 	total_size += data_size;
 	*size = total_size;
 
-	u8* data = new u8[total_size];
+	size_t aligned_size = (total_size + 15) & ~15;
+	u8* data = new u8[aligned_size];
 	*paramsfo = data;
-	memset(data, 0, total_size);
+	memset(data, 0, aligned_size);
 	memcpy(data, &header, sizeof(Header));
 
 	// Now fill
@@ -261,47 +267,45 @@ bool ParamSFOData::WriteSFO(u8 **paramsfo, size_t *size) const {
 	u8* key_ptr = data + header.key_table_start;
 	u8* data_ptr = data + header.data_table_start;
 
-	for (auto it = values.begin(); it != values.end(); ++it)
+	for (const auto &[k, v] : values)
 	{
 		u16 offset = (u16)(key_ptr - (data+header.key_table_start));
 		index_ptr->key_table_offset = offset;
 		offset = (u16)(data_ptr - (data+header.data_table_start));
 		index_ptr->data_table_offset = offset;
-		index_ptr->param_max_len = it->second.max_size;
-		if (it->second.type == VT_INT)
+		index_ptr->param_max_len = v.max_size;
+		if (v.type == VT_INT)
 		{
 			index_ptr->param_fmt = 0x0404;
 			index_ptr->param_len = 4;
 
-			*(s32_le *)data_ptr = it->second.i_value;
+			*(s32_le *)data_ptr = v.i_value;
 		}
-		else if (it->second.type == VT_UTF8_SPE)
+		else if (v.type == VT_UTF8_SPE)
 		{
 			index_ptr->param_fmt = 0x0004;
-			index_ptr->param_len = it->second.u_size;
+			index_ptr->param_len = v.u_size;
 
 			memset(data_ptr,0,index_ptr->param_max_len);
-			memcpy(data_ptr,it->second.u_value,index_ptr->param_len);
+			memcpy(data_ptr,v.u_value,index_ptr->param_len);
 		}
-		else if (it->second.type == VT_UTF8)
+		else if (v.type == VT_UTF8)
 		{
 			index_ptr->param_fmt = 0x0204;
-			index_ptr->param_len = (u32)it->second.s_value.size()+1;
+			index_ptr->param_len = (u32)v.s_value.size()+1;
 
-			memcpy(data_ptr,it->second.s_value.c_str(),index_ptr->param_len);
+			memcpy(data_ptr,v.s_value.c_str(),index_ptr->param_len);
 			data_ptr[index_ptr->param_len] = 0;
 		}
 
-		memcpy(key_ptr,it->first.c_str(),it->first.size());
-		key_ptr[it->first.size()] = 0;
+		memcpy(key_ptr,k.c_str(),k.size());
+		key_ptr[k.size()] = 0;
 
 		data_ptr += index_ptr->param_max_len;
-		key_ptr += it->first.size()+1;
+		key_ptr += k.size() + 1;
 		index_ptr++;
 
 	}
-
-	return true;
 }
 
 void ParamSFOData::Clear() {
@@ -320,15 +324,15 @@ void ParamSFOData::ValueData::SetData(const u8* data, int size) {
 	u_size = size;
 }
 
-std::string ParamSFOData::GenerateFakeID(const std::string &filename) const {
+std::string ParamSFOData::GenerateFakeID(const Path &filename) const {
 	// Generates fake gameID for homebrew based on it's folder name.
 	// Should probably not be a part of ParamSFO, but it'll be called in same places.
-	std::string file = PSP_CoreParameter().fileToStart.ToString();
+	// FileToStart here is actually a directory name, not a file, so taking GetFilename on it gets what we want.
+	Path path = PSP_CoreParameter().fileToStart;
 	if (!filename.empty())
-		file = filename;
+		path = filename;
 
-	std::size_t lslash = file.find_last_of("/");
-	file = file.substr(lslash + 1);
+	std::string file = path.GetFilename();
 
 	int sumOfAllLetters = 0;
 	for (char &c : file) {

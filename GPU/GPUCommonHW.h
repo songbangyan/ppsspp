@@ -9,6 +9,7 @@ public:
 	GPUCommonHW(GraphicsContext *gfxCtx, Draw::DrawContext *draw);
 	~GPUCommonHW();
 
+	// This can fail, and if so no render pass is active.
 	void CopyDisplayToOutput(bool reallyDirty) override;
 	void DoState(PointerWrap &p) override;
 	void DeviceLost() override;
@@ -27,12 +28,22 @@ public:
 	bool GetCurrentTexture(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) override;
 	bool GetCurrentClut(GPUDebugBuffer &buffer) override;
 
+	FramebufferManagerCommon *GetFramebufferManagerCommon() override {
+		return framebufferManager_;
+	}
+	TextureCacheCommon *GetTextureCacheCommon() override {
+		return textureCache_;
+	}
+
 	// Using string because it's generic - makes no assumptions on the size of the shader IDs of this backend.
 	std::vector<std::string> DebugGetShaderIDs(DebugShaderType shader) override;
 	std::string DebugGetShaderString(std::string id, DebugShaderType shader, DebugShaderStringType stringType) override;
 
 	void SetDisplayFramebuffer(u32 framebuf, u32 stride, GEBufferFormat format) override;
 	void InvalidateCache(u32 addr, int size, GPUInvalidationType type) override;
+
+	u32 DrawSync(int mode) override;
+	int ListSync(int listid, int mode) override;
 
 	bool FramebufferDirty() override;
 	bool FramebufferReallyDirty() override;
@@ -67,6 +78,8 @@ public:
 
 	void FastRunLoop(DisplayList &list) override;
 	void ExecuteOp(u32 op, u32 diff) override;
+
+	bool PresentedThisFrame() const override;
 
 private:
 	void CheckDepthUsage(VirtualFramebuffer *vfb) override;

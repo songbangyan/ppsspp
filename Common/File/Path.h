@@ -50,6 +50,9 @@ public:
 	PathType Type() const {
 		return type_;
 	}
+	bool IsLocalType() const {
+		return type_ == PathType::NATIVE || type_ == PathType::CONTENT_URI;
+	}
 
 	bool Valid() const { return !path_.empty(); }
 	bool IsRoot() const { return path_ == "/"; }  // Special value - only path that can end in a slash.
@@ -118,7 +121,7 @@ public:
 		return path_ != other.path_ || type_ != other.type_;
 	}
 
-	bool FilePathContainsNoCase(const std::string &needle) const;
+	bool FilePathContainsNoCase(std::string_view needle) const;
 
 	bool StartsWith(const Path &other) const;
 
@@ -142,9 +145,7 @@ private:
 // Utility function for parsing out file extensions.
 std::string GetExtFromString(std::string_view str);
 
-// Utility function for fixing the case of paths. Only present on Unix-like systems.
-
-#if HOST_IS_CASE_SENSITIVE
+// Utility function for fixing the case of paths. Only necessary on Unix-like systems.
 
 enum FixPathCaseBehavior {
 	FPC_FILE_MUST_EXIST,  // all path components must exist (rmdir, move from)
@@ -153,5 +154,3 @@ enum FixPathCaseBehavior {
 };
 
 bool FixPathCase(const Path &basePath, std::string &path, FixPathCaseBehavior behavior);
-
-#endif

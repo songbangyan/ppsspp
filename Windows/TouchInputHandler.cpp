@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include <Windows.h>
+#include "Common/CommonWindows.h"
 #include "Windows/TouchInputHandler.h"
 
 #include <algorithm>
@@ -7,7 +7,6 @@
 #include "Common/System/Display.h"
 #include "Common/System/NativeApp.h"
 
-#include "Common/CommonWindows.h"
 #include "Common/CommonFuncs.h"
 #include "Common/Input/InputState.h"
 #include "Common/Log.h"
@@ -90,7 +89,7 @@ void TouchInputHandler::handleTouchEvent(HWND hWnd, UINT message, WPARAM wParam,
 			}
 			closeTouch(touchInputData);
 		} else {
-			WARN_LOG(SYSTEM, "Failed to read input data: %s", GetLastErrorMsg().c_str());
+			WARN_LOG(Log::System, "Failed to read input data: %s", GetLastErrorMsg().c_str());
 		}
 		delete [] inputs;
 	}

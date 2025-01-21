@@ -142,10 +142,8 @@ CtrlRegisterList::CtrlRegisterList(HWND _wnd)
 CtrlRegisterList::~CtrlRegisterList()
 {
 	DeleteObject(font);
-	if (lastCat0Values != NULL)
-		delete [] lastCat0Values;
-	if (changedCat0Regs != NULL)
-		delete [] changedCat0Regs;
+	delete [] lastCat0Values;
+	delete [] changedCat0Regs;
 }
 
 void fillRect(HDC hdc, RECT *rect, COLORREF colour);
@@ -578,8 +576,8 @@ void CtrlRegisterList::onMouseMove(WPARAM wParam, LPARAM lParam, int button)
 
 int CtrlRegisterList::yToIndex(int y)
 {
-//	int ydiff=y-rect.bottom/2-rowHeight/2;
-//	ydiff=(int)(floorf((float)ydiff / (float)rowHeight))+1;
+//	int ydiff=y-rect.bottom/2-rowHeight_/2;
+//	ydiff=(int)(floorf((float)ydiff / (float)rowHeight_))+1;
 //	return curAddress + ydiff * align;
 	int n = (y/rowHeight) - 1;
 	if (n<0) n=0;

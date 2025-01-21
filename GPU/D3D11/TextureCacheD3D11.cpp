@@ -21,23 +21,16 @@
 
 #include <d3d11.h>
 
-#include "Common/TimeUtil.h"
-#include "Core/MemMap.h"
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
 #include "GPU/Common/GPUStateUtils.h"
 #include "GPU/Common/DrawEngineCommon.h"
 #include "GPU/D3D11/TextureCacheD3D11.h"
 #include "GPU/D3D11/FramebufferManagerD3D11.h"
-#include "GPU/D3D11/ShaderManagerD3D11.h"
-#include "GPU/Common/TextureShaderCommon.h"
 #include "GPU/D3D11/D3D11Util.h"
-#include "GPU/Common/FramebufferManagerCommon.h"
-#include "GPU/Common/TextureDecoder.h"
 #include "Core/Config.h"
 
 #include "ext/xxhash.h"
-#include "Common/Math/math_util.h"
 
 // For depth depal
 struct DepthPushConstants {
@@ -274,8 +267,8 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 	ID3D11Resource *texture = DxTex(entry);
 	_assert_(texture == nullptr);
 
-	// The PSP only supports 8 mip levels, but we support 12 in the texture replacer (4k textures down to 1).
-	D3D11_SUBRESOURCE_DATA subresData[12]{};
+	// The PSP only supports 8 mip levels, but we support more in the texture replacer. 20 will never run out.
+	D3D11_SUBRESOURCE_DATA subresData[20]{};
 
 	if (plan.depth == 1) {
 		// We don't yet have mip generation, so clamp the number of levels to the ones we can load directly.
@@ -333,7 +326,7 @@ void TextureCacheD3D11::BuildTexture(TexCacheEntry *const entry) {
 		}
 
 		if (!data) {
-			ERROR_LOG(G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", mipWidth, mipHeight);
+			ERROR_LOG(Log::G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", mipWidth, mipHeight);
 			return;
 		}
 
@@ -535,7 +528,7 @@ bool TextureCacheD3D11::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level
 	return true;
 }
 
-void *TextureCacheD3D11::GetNativeTextureView(const TexCacheEntry *entry) {
+void *TextureCacheD3D11::GetNativeTextureView(const TexCacheEntry *entry, bool flat) const {
 	ID3D11ShaderResourceView *textureView = DxView(entry);
 	return (void *)textureView;
 }

@@ -99,7 +99,7 @@ UI::EventReturn PopupMultiChoice::HandleClick(UI::EventParams &e) {
 
 	std::vector<std::string> choices;
 	for (int i = 0; i < numChoices_; i++) {
-		choices.push_back(category ? category->T(choices_[i]) : choices_[i]);
+		choices.push_back(category ? std::string(category->T(choices_[i])) : std::string(choices_[i]));
 	}
 
 	ListPopupScreen *popupScreen = new ListPopupScreen(ChopTitle(text_), choices, *value_ - minVal_,
@@ -141,12 +141,12 @@ void PopupMultiChoice::ChoiceCallback(int num) {
 		UI::EventParams e{};
 		e.v = this;
 		e.a = num;
+		e.b = PostChoiceCallback(num);
 		OnChoice.Trigger(e);
 
 		if (restoreFocus_) {
 			SetFocusedView(this);
 		}
-		PostChoiceCallback(num);
 	}
 }
 
@@ -154,31 +154,49 @@ std::string PopupMultiChoice::ValueText() const {
 	return valueText_;
 }
 
-PopupSliderChoice::PopupSliderChoice(int *value, int minValue, int maxValue, int defaultValue, const std::string &text, ScreenManager *screenManager, const std::string &units, LayoutParams *layoutParams)
+PopupSliderChoice::PopupSliderChoice(int *value, int minValue, int maxValue, int defaultValue, std::string_view text, ScreenManager *screenManager, std::string_view units, LayoutParams *layoutParams)
 	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), minValue_(minValue), maxValue_(maxValue), defaultValue_(defaultValue), step_(1), units_(units), screenManager_(screenManager) {
 	fmt_ = "%d";
 	OnClick.Handle(this, &PopupSliderChoice::HandleClick);
 }
 
-PopupSliderChoice::PopupSliderChoice(int *value, int minValue, int maxValue, int defaultValue, const std::string &text, int step, ScreenManager *screenManager, const std::string &units, LayoutParams *layoutParams)
+PopupSliderChoice::PopupSliderChoice(int *value, int minValue, int maxValue, int defaultValue, std::string_view text, int step, ScreenManager *screenManager, std::string_view units, LayoutParams *layoutParams)
 	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), minValue_(minValue), maxValue_(maxValue), defaultValue_(defaultValue), step_(step), units_(units), screenManager_(screenManager) {
 	fmt_ = "%d";
 	OnClick.Handle(this, &PopupSliderChoice::HandleClick);
 }
 
-PopupSliderChoiceFloat::PopupSliderChoiceFloat(float *value, float minValue, float maxValue, float defaultValue, const std::string &text, ScreenManager *screenManager, const std::string &units, LayoutParams *layoutParams)
+void PopupSliderChoice::SetFormat(std::string_view fmt) {
+	fmt_ = fmt;
+	if (units_.empty()) {
+		if (startsWith(fmt_, "%d ")) {
+			units_ = fmt_.substr(3);
+		}
+	}
+}
+
+PopupSliderChoiceFloat::PopupSliderChoiceFloat(float *value, float minValue, float maxValue, float defaultValue, std::string_view text, ScreenManager *screenManager, std::string_view units, LayoutParams *layoutParams)
 	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), minValue_(minValue), maxValue_(maxValue), defaultValue_(defaultValue), step_(1.0f), units_(units), screenManager_(screenManager) {
 	_dbg_assert_(maxValue > minValue);
 	fmt_ = "%2.2f";
 	OnClick.Handle(this, &PopupSliderChoiceFloat::HandleClick);
 }
 
-PopupSliderChoiceFloat::PopupSliderChoiceFloat(float *value, float minValue, float maxValue, float defaultValue, const std::string &text, float step, ScreenManager *screenManager, const std::string &units, LayoutParams *layoutParams)
+PopupSliderChoiceFloat::PopupSliderChoiceFloat(float *value, float minValue, float maxValue, float defaultValue, std::string_view text, float step, ScreenManager *screenManager, std::string_view units, LayoutParams *layoutParams)
 	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), minValue_(minValue), maxValue_(maxValue), defaultValue_(defaultValue), step_(step), units_(units), screenManager_(screenManager) {
 	_dbg_assert_(step > 0.0f);
 	_dbg_assert_(maxValue > minValue);
 	fmt_ = "%2.2f";
 	OnClick.Handle(this, &PopupSliderChoiceFloat::HandleClick);
+}
+
+void PopupSliderChoiceFloat::SetFormat(std::string_view fmt) {
+	fmt_ = fmt;
+	if (units_.empty()) {
+		if (startsWith(fmt_, "%f ")) {
+			units_ = fmt_.substr(3);
+		}
+	}
 }
 
 EventReturn PopupSliderChoice::HandleClick(EventParams &e) {
@@ -204,7 +222,7 @@ EventReturn PopupSliderChoice::HandleChange(EventParams &e) {
 	return EVENT_DONE;
 }
 
-static bool IsValidNumberFormatString(const std::string &s) {
+static bool IsValidNumberFormatString(std::string_view s) {
 	if (s.empty())
 		return false;
 	size_t percentCount = 0;
@@ -230,9 +248,9 @@ std::string PopupSliderChoice::ValueText() const {
 	char temp[256];
 	temp[0] = '\0';
 	if (zeroLabel_.size() && *value_ == 0) {
-		truncate_cpy(temp, zeroLabel_.c_str());
+		truncate_cpy(temp, zeroLabel_);
 	} else if (negativeLabel_.size() && *value_ < 0) {
-		truncate_cpy(temp, negativeLabel_.c_str());
+		truncate_cpy(temp, negativeLabel_);
 	} else {
 		// Would normally be dangerous to have user-controlled format strings!
 		// However, let's check that there's only one % sign, and that it's not followed by an S.
@@ -272,7 +290,7 @@ std::string PopupSliderChoiceFloat::ValueText() const {
 	char temp[256];
 	temp[0] = '\0';
 	if (zeroLabel_.size() && *value_ == 0.0f) {
-		truncate_cpy(temp, zeroLabel_.c_str());
+		truncate_cpy(temp, zeroLabel_);
 	} else if (IsValidNumberFormatString(fmt_)) {
 		snprintf(temp, sizeof(temp), fmt_.c_str(), *value_);
 	} else {
@@ -500,8 +518,8 @@ void SliderFloatPopupScreen::OnCompleted(DialogResult result) {
 	}
 }
 
-PopupTextInputChoice::PopupTextInputChoice(std::string *value, const std::string &title, const std::string &placeholder, int maxLen, ScreenManager *screenManager, LayoutParams *layoutParams)
-	: AbstractChoiceWithValueDisplay(title, layoutParams), screenManager_(screenManager), value_(value), placeHolder_(placeholder), maxLen_(maxLen) {
+PopupTextInputChoice::PopupTextInputChoice(RequesterToken token, std::string *value, std::string_view title, std::string_view placeholder, int maxLen, ScreenManager *screenManager, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(title, layoutParams), screenManager_(screenManager), value_(value), placeHolder_(placeholder), maxLen_(maxLen), token_(token), restriction_(StringRestriction::None) {
 	OnClick.Handle(this, &PopupTextInputChoice::HandleClick);
 }
 
@@ -510,8 +528,8 @@ EventReturn PopupTextInputChoice::HandleClick(EventParams &e) {
 
 	// Choose method depending on platform capabilities.
 	if (System_GetPropertyBool(SYSPROP_HAS_TEXT_INPUT_DIALOG)) {
-		System_InputBoxGetString(text_, *value_ , [=](const std::string &enteredValue, int) {
-			*value_ = StripSpaces(enteredValue);
+		System_InputBoxGetString(token_, text_, *value_, passwordMasking_, [=](const std::string &enteredValue, int) {
+			*value_ = SanitizeString(StripSpaces(enteredValue), restriction_, minLen_, maxLen_);
 			EventParams params{};
 			OnChange.Trigger(params);
 		});
@@ -519,6 +537,10 @@ EventReturn PopupTextInputChoice::HandleClick(EventParams &e) {
 	}
 
 	TextEditPopupScreen *popupScreen = new TextEditPopupScreen(value_, placeHolder_, ChopTitle(text_), maxLen_);
+	popupScreen->SetPasswordMasking(passwordMasking_);
+	if (System_GetPropertyBool(SYSPROP_KEYBOARD_IS_SOFT)) {
+		popupScreen->SetAlignTop(true);
+	}
 	popupScreen->OnChange.Handle(this, &PopupTextInputChoice::HandleChange);
 	if (e.v)
 		popupScreen->SetPopupOrigin(e.v);
@@ -531,6 +553,7 @@ std::string PopupTextInputChoice::ValueText() const {
 }
 
 EventReturn PopupTextInputChoice::HandleChange(EventParams &e) {
+	*value_ = StripSpaces(SanitizeString(*value_, restriction_, minLen_, maxLen_));
 	e.v = this;
 	OnChange.Trigger(e);
 
@@ -549,6 +572,7 @@ void TextEditPopupScreen::CreatePopupContents(UI::ViewGroup *parent) {
 	edit_ = new TextEdit(textEditValue_, Title(), placeholder_, new LinearLayoutParams(1.0f));
 	edit_->SetMaxLen(maxLen_);
 	edit_->SetTextColor(dc.theme->popupStyle.fgColor);
+	edit_->SetPasswordMasking(passwordMasking_);
 	lin->Add(edit_);
 
 	UI::SetFocusedView(edit_);
@@ -575,7 +599,7 @@ void AbstractChoiceWithValueDisplay::GetContentDimensionsBySpec(const UIContext 
 	Bounds availBounds(0, 0, availWidth, vert.size);
 
 	float valueW, valueH;
-	dc.MeasureTextRect(dc.theme->uiFont, scale, scale, valueText.c_str(), (int)valueText.size(), availBounds, &valueW, &valueH, ALIGN_RIGHT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
+	dc.MeasureTextRect(dc.theme->uiFont, scale, scale, valueText, availBounds, &valueW, &valueH, ALIGN_RIGHT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
 	valueW += paddingX;
 
 	// Give the choice itself less space to grow in, so it shrinks if needed.
@@ -607,20 +631,20 @@ void AbstractChoiceWithValueDisplay::Draw(UIContext &dc) {
 
 	std::string valueText = ValueText();
 
-	if (passwordDisplay_) {
+	if (passwordMasking_) {
 		// Replace all characters with stars.
 		memset(&valueText[0], '*', valueText.size());
 	}
 
 	// If there is a label, assume we want at least 20% of the size for it, at a minimum.
 
-	if (!text_.empty()) {
+	if (!text_.empty() && !hideTitle_) {
 		float availWidth = (bounds_.w - paddingX * 2) * 0.8f;
 		float scale = CalculateValueScale(dc, valueText, availWidth);
 
 		float w, h;
 		Bounds availBounds(0, 0, availWidth, bounds_.h);
-		dc.MeasureTextRect(dc.theme->uiFont, scale, scale, valueText.c_str(), (int)valueText.size(), availBounds, &w, &h, ALIGN_RIGHT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
+		dc.MeasureTextRect(dc.theme->uiFont, scale, scale, valueText, availBounds, &w, &h, ALIGN_RIGHT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
 		textPadding_.right = w + paddingX;
 
 		Choice::Draw(dc);
@@ -630,21 +654,21 @@ void AbstractChoiceWithValueDisplay::Draw(UIContext &dc) {
 		}
 		dc.SetFontScale(scale, scale);
 		Bounds valueBounds(bounds_.x2() - textPadding_.right - imagePadding, bounds_.y, w, bounds_.h);
-		dc.DrawTextRect(valueText.c_str(), valueBounds, style.fgColor, ALIGN_RIGHT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
+		dc.DrawTextRect(valueText, valueBounds, style.fgColor, ALIGN_RIGHT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
 		dc.SetFontScale(1.0f, 1.0f);
 	} else {
 		Choice::Draw(dc);
 		float scale = CalculateValueScale(dc, valueText, bounds_.w);
 		dc.SetFontScale(scale, scale);
-		dc.DrawTextRect(valueText.c_str(), bounds_.Expand(-paddingX, 0.0f), style.fgColor, ALIGN_LEFT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
+		dc.DrawTextRect(valueText, bounds_.Expand(-paddingX, 0.0f), style.fgColor, ALIGN_LEFT | ALIGN_VCENTER | FLAG_WRAP_TEXT);
 		dc.SetFontScale(1.0f, 1.0f);
 	}
 }
 
-float AbstractChoiceWithValueDisplay::CalculateValueScale(const UIContext &dc, const std::string &valueText, float availWidth) const {
+float AbstractChoiceWithValueDisplay::CalculateValueScale(const UIContext &dc, std::string_view valueText, float availWidth) const {
 	float actualWidth, actualHeight;
 	Bounds availBounds(0, 0, availWidth, bounds_.h);
-	dc.MeasureTextRect(dc.theme->uiFont, 1.0f, 1.0f, valueText.c_str(), (int)valueText.size(), availBounds, &actualWidth, &actualHeight);
+	dc.MeasureTextRect(dc.theme->uiFont, 1.0f, 1.0f, valueText, availBounds, &actualWidth, &actualHeight);
 	if (actualWidth > availWidth) {
 		return std::max(0.8f, availWidth / actualWidth);
 	}
@@ -664,14 +688,13 @@ std::string ChoiceWithValueDisplay::ValueText() const {
 	} else if (iValue_ != nullptr) {
 		valueText << *iValue_;
 	}
-
 	return valueText.str();
 }
 
-FileChooserChoice::FileChooserChoice(std::string *value, const std::string &text, BrowseFileType fileType, LayoutParams *layoutParams)
-	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), fileType_(fileType) {
+FileChooserChoice::FileChooserChoice(RequesterToken token, std::string *value, std::string_view text, BrowseFileType fileType, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value) {
 	OnClick.Add([=](UI::EventParams &) {
-		System_BrowseForFile(text_, fileType, [=](const std::string &returnValue, int) {
+		System_BrowseForFile(token, text_, fileType, [=](const std::string &returnValue, int) {
 			if (*value_ != returnValue) {
 				*value = returnValue;
 				UI::EventParams e{};
@@ -686,10 +709,34 @@ FileChooserChoice::FileChooserChoice(std::string *value, const std::string &text
 std::string FileChooserChoice::ValueText() const {
 	if (value_->empty()) {
 		auto di = GetI18NCategory(I18NCat::DIALOG);
-		return di->T("Default");
+		return std::string(di->T("Default"));
 	}
 	Path path(*value_);
 	return path.GetFilename();
+}
+
+FolderChooserChoice::FolderChooserChoice(RequesterToken token, std::string *value, std::string_view text, LayoutParams *layoutParams)
+	: AbstractChoiceWithValueDisplay(text, layoutParams), value_(value), token_(token) {
+	OnClick.Add([=](UI::EventParams &) {
+		System_BrowseForFolder(token_, text_, Path(*value), [=](const std::string &returnValue, int) {
+			if (*value_ != returnValue) {
+				*value = returnValue;
+				UI::EventParams e{};
+				e.s = *value;
+				OnChange.Trigger(e);
+			}
+		});
+		return UI::EVENT_DONE;
+	});
+}
+
+std::string FolderChooserChoice::ValueText() const {
+	if (value_->empty()) {
+		auto di = GetI18NCategory(I18NCat::DIALOG);
+		return std::string(di->T("Default"));
+	}
+	Path path(*value_);
+	return path.ToVisualString();
 }
 
 }  // namespace

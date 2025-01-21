@@ -15,35 +15,36 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#include "ppsspp_config.h"
+
 #include <cmath>
-#include <algorithm>
 
 #include "Common/Common.h"
 #include "Common/CPUDetect.h"
 #include "Common/Math/math_util.h"
 #include "Common/MemoryUtil.h"
 #include "Common/Profiler/Profiler.h"
-#include "Core/Config.h"
 #include "GPU/GPUState.h"
 #include "GPU/Common/DrawEngineCommon.h"
 #include "GPU/Common/VertexDecoderCommon.h"
-#include "GPU/Common/SplineCommon.h"
-#include "GPU/Common/TextureDecoder.h"
-#include "GPU/Debugger/Debugger.h"
+#include "GPU/Common/SoftwareTransformCommon.h"
+#include "Common/Math/SIMDHeaders.h"
 #include "GPU/Software/BinManager.h"
 #include "GPU/Software/Clipper.h"
-#include "GPU/Software/FuncId.h"
 #include "GPU/Software/Lighting.h"
-#include "GPU/Software/Rasterizer.h"
 #include "GPU/Software/RasterizerRectangle.h"
 #include "GPU/Software/TransformUnit.h"
+
+// For the SSE4 stuff
+#if PPSSPP_ARCH(SSE2)
+#include <smmintrin.h>
+#endif
 
 #define TRANSFORM_BUF_SIZE (65536 * 48)
 
 TransformUnit::TransformUnit() {
 	decoded_ = (u8 *)AllocateAlignedMemory(TRANSFORM_BUF_SIZE, 16);
-	if (!decoded_)
-		return;
+	_assert_(decoded_);
 	binner_ = new BinManager();
 }
 
@@ -64,11 +65,11 @@ SoftwareDrawEngine::~SoftwareDrawEngine() {}
 
 void SoftwareDrawEngine::NotifyConfigChanged() {
 	DrawEngineCommon::NotifyConfigChanged();
-	decOptions_.applySkinInDecode = true;
+	applySkinInDecode_ = true;
 }
 
-void SoftwareDrawEngine::DispatchFlush() {
-	transformUnit.Flush("debug");
+void SoftwareDrawEngine::Flush() {
+	transformUnit.Flush(gpuCommon_, "debug");
 }
 
 void SoftwareDrawEngine::DispatchSubmitPrim(const void *verts, const void *inds, GEPrimitiveType prim, int vertexCount, u32 vertTypeID, bool clockwise, int *bytesRead) {
@@ -499,7 +500,7 @@ public:
 		// If we're only using a subset of verts, it's better to decode with random access (usually.)
 		// However, if we're reusing a lot of verts, we should read and cache them.
 		useCache_ = useIndices_ && vertex_count > (upperBound_ - lowerBound_ + 1);
-		if (useCache_ && cached_.size() < upperBound_ - lowerBound_ + 1)
+		if (useCache_ && (int)cached_.size() < upperBound_ - lowerBound_ + 1)
 			cached_.resize(std::max(128, upperBound_ - lowerBound_ + 1));
 	}
 
@@ -835,7 +836,7 @@ void TransformUnit::SubmitPrimitive(const void* vertices, const void* indices, G
 		}
 
 	default:
-		ERROR_LOG(G3D, "Unexpected prim type: %d", prim_type);
+		ERROR_LOG(Log::G3D, "Unexpected prim type: %d", prim_type);
 		break;
 	}
 }
@@ -892,12 +893,12 @@ void TransformUnit::SendTriangle(CullType cullType, const ClipVertexData *verts,
 	}
 }
 
-void TransformUnit::Flush(const char *reason) {
+void TransformUnit::Flush(GPUCommon *common, const char *reason) {
 	if (!hasDraws_)
 		return;
 
 	binner_->Flush(reason);
-	GPUDebug::NotifyDraw();
+	common->NotifyFlush();
 	hasDraws_ = false;
 }
 
@@ -906,14 +907,14 @@ void TransformUnit::GetStats(char *buffer, size_t bufsize) {
 	binner_->GetStats(buffer, bufsize);
 }
 
-void TransformUnit::FlushIfOverlap(const char *reason, bool modifying, uint32_t addr, uint32_t stride, uint32_t w, uint32_t h) {
+void TransformUnit::FlushIfOverlap(GPUCommon *common, const char *reason, bool modifying, uint32_t addr, uint32_t stride, uint32_t w, uint32_t h) {
 	if (!hasDraws_)
 		return;
 
 	if (binner_->HasPendingWrite(addr, stride, w, h))
-		Flush(reason);
+		Flush(common, reason);
 	if (modifying && binner_->HasPendingRead(addr, stride, w, h))
-		Flush(reason);
+		Flush(common, reason);
 }
 
 void TransformUnit::NotifyClutUpdate(const void *src) {
@@ -922,7 +923,7 @@ void TransformUnit::NotifyClutUpdate(const void *src) {
 
 // TODO: This probably is not the best interface.
 // Also, we should try to merge this into the similar function in DrawEngineCommon.
-bool TransformUnit::GetCurrentSimpleVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) {
+bool TransformUnit::GetCurrentDrawAsDebugVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) {
 	// This is always for the current vertices.
 	u16 indexLowerBound = 0;
 	u16 indexUpperBound = count - 1;
@@ -950,11 +951,11 @@ bool TransformUnit::GetCurrentSimpleVertices(int count, std::vector<GPUDebugVert
 				}
 				break;
 			case GE_VTYPE_IDX_32BIT:
-				WARN_LOG_REPORT_ONCE(simpleIndexes32, G3D, "SimpleVertices: Decoding 32-bit indexes");
+				WARN_LOG_REPORT_ONCE(simpleIndexes32, Log::G3D, "SimpleVertices: Decoding 32-bit indexes");
 				for (int i = 0; i < count; ++i) {
 					// These aren't documented and should be rare.  Let's bounds check each one.
 					if (inds32[i] != (u16)inds32[i]) {
-						ERROR_LOG_REPORT_ONCE(simpleIndexes32Bounds, G3D, "SimpleVertices: Index outside 16-bit range");
+						ERROR_LOG_REPORT_ONCE(simpleIndexes32Bounds, Log::G3D, "SimpleVertices: Index outside 16-bit range");
 					}
 					indices[i] = (u16)inds32[i];
 				}
@@ -974,13 +975,13 @@ bool TransformUnit::GetCurrentSimpleVertices(int count, std::vector<GPUDebugVert
 
 	VertexDecoder vdecoder;
 	VertexDecoderOptions options{};
-	options.applySkinInDecode = true;
-	vdecoder.SetVertexType(gstate.vertType, options);
+	u32 vertTypeID = GetVertTypeID(gstate.vertType, gstate.getUVGenMode(), true);
+	vdecoder.SetVertexType(vertTypeID, options);
 
 	if (!Memory::IsValidRange(gstate_c.vertexAddr, (indexUpperBound + 1) * vdecoder.VertexSize()))
 		return false;
 
-	DrawEngineCommon::NormalizeVertices((u8 *)(&simpleVertices[0]), (u8 *)(&temp_buffer[0]), Memory::GetPointer(gstate_c.vertexAddr), &vdecoder, indexLowerBound, indexUpperBound, gstate.vertType);
+	::NormalizeVertices(&simpleVertices[0], (u8 *)(&temp_buffer[0]), Memory::GetPointer(gstate_c.vertexAddr), indexLowerBound, indexUpperBound, &vdecoder, gstate.vertType);
 
 	float world[16];
 	float view[16];

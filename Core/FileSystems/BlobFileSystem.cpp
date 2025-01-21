@@ -15,7 +15,6 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
-#include <ctime>
 #include "Core/FileSystems/BlobFileSystem.h"
 
 BlobFileSystem::BlobFileSystem(IHandleAllocator *hAlloc, FileLoader *fileLoader, std::string alias)
@@ -130,6 +129,6 @@ bool BlobFileSystem::RemoveFile(const std::string &filename) {
 	return false;
 }
 
-u64 BlobFileSystem::FreeSpace(const std::string &path) {
+u64 BlobFileSystem::FreeDiskSpace(const std::string &path) {
 	return 0;
 }

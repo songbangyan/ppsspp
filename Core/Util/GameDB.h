@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <string_view>
+#include <mutex>
 
 class VFSInterface;
 
@@ -11,16 +12,18 @@ class VFSInterface;
 struct GameDBInfo {
 	std::string title;
 	std::string foreignTitle;
-	uint32_t crc;
-	uint64_t size;
+	uint32_t crc = 0;
+	uint64_t size = 0;
 };
 
 class GameDB {
 public:
-	bool LoadFromVFS(VFSInterface &vfs, const char *filename);
+	// Warning: Linear search. Don't call it every frame if possible.
 	bool GetGameInfos(std::string_view id, std::vector<GameDBInfo> *infos);
 
 private:
+	// Call under lock.
+	void LoadIfNeeded();
 	size_t GetColumnIndex(std::string_view name) const;
 
 	struct Line {
@@ -36,6 +39,9 @@ private:
 	std::string contents_;
 	std::vector<Line> lines_;
 	std::vector<std::string_view> columns_;
+	bool loaded_ = false;
+
+	std::mutex loadMutex_;
 };
 
 extern GameDB g_gameDB;

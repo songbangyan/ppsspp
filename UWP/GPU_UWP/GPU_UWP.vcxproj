@@ -109,6 +109,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\GPU\Common\DepthRaster.h" />
     <ClInclude Include="..\..\GPU\Common\ReplacedTexture.h" />
     <ClInclude Include="..\..\GPU\Common\TextureReplacer.h" />
     <ClInclude Include="..\..\GPU\Common\TextureShaderCommon.h" />
@@ -136,6 +137,7 @@
     <ClInclude Include="..\..\GPU\Common\TextureScalerCommon.h" />
     <ClInclude Include="..\..\GPU\Common\TransformCommon.h" />
     <ClInclude Include="..\..\GPU\Common\VertexDecoderCommon.h" />
+    <ClInclude Include="..\..\GPU\Common\VertexDecoderHandwritten.h" />
     <ClInclude Include="..\..\GPU\Common\VertexShaderGenerator.h" />
     <ClInclude Include="..\..\GPU\D3D11\D3D11Util.h" />
     <ClInclude Include="..\..\GPU\D3D11\DrawEngineD3D11.h" />
@@ -150,13 +152,14 @@
     <ClInclude Include="..\..\GPU\Debugger\Playback.h" />
     <ClInclude Include="..\..\GPU\Debugger\Record.h" />
     <ClInclude Include="..\..\GPU\Debugger\RecordFormat.h" />
+    <ClInclude Include="..\..\GPU\Debugger\Registers.h" />
     <ClInclude Include="..\..\GPU\Debugger\Stepping.h" />
     <ClInclude Include="..\..\GPU\GeDisasm.h" />
     <ClInclude Include="..\..\GPU\ge_constants.h" />
     <ClInclude Include="..\..\GPU\GPU.h" />
     <ClInclude Include="..\..\GPU\GPUCommon.h" />
     <ClInclude Include="..\..\GPU\GPUCommonHW.h" />
-    <ClInclude Include="..\..\GPU\GPUInterface.h" />
+    <ClInclude Include="..\..\GPU\GPUDefinitions.h" />
     <ClInclude Include="..\..\GPU\GPUState.h" />
     <ClInclude Include="..\..\GPU\Math3D.h" />
     <ClInclude Include="..\..\GPU\Software\BinManager.h" />
@@ -175,6 +178,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\GPU\Common\DepthBufferCommon.cpp" />
+    <ClCompile Include="..\..\GPU\Common\DepthRaster.cpp" />
     <ClCompile Include="..\..\GPU\Common\ReplacedTexture.cpp" />
     <ClCompile Include="..\..\GPU\Common\TextureReplacer.cpp" />
     <ClCompile Include="..\..\GPU\Common\TextureShaderCommon.cpp" />
@@ -203,6 +207,7 @@
     <ClCompile Include="..\..\GPU\Common\VertexDecoderArm.cpp" />
     <ClCompile Include="..\..\GPU\Common\VertexDecoderArm64.cpp" />
     <ClCompile Include="..\..\GPU\Common\VertexDecoderCommon.cpp" />
+    <ClCompile Include="..\..\GPU\Common\VertexDecoderHandwritten.cpp" />
     <ClCompile Include="..\..\GPU\Common\VertexDecoderX86.cpp" />
     <ClCompile Include="..\..\GPU\Common\VertexShaderGenerator.cpp" />
     <ClCompile Include="..\..\GPU\D3D11\D3D11Util.cpp" />
@@ -217,6 +222,7 @@
     <ClCompile Include="..\..\GPU\Debugger\GECommandTable.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Playback.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Record.cpp" />
+    <ClCompile Include="..\..\GPU\Debugger\State.cpp" />
     <ClCompile Include="..\..\GPU\Debugger\Stepping.cpp" />
     <ClCompile Include="..\..\GPU\GeConstants.cpp" />
     <ClCompile Include="..\..\GPU\GeDisasm.cpp" />

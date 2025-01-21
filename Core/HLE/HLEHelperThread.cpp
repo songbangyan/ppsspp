@@ -17,7 +17,6 @@
 
 #include "Common/Serialize/Serializer.h"
 #include "Common/Serialize/SerializeFuncs.h"
-#include "Core/CoreTiming.h"
 #include "Core/MemMapHelpers.h"
 #include "Core/HLE/HLE.h"
 #include "Core/HLE/HLEHelperThread.h"
@@ -97,7 +96,7 @@ void HLEHelperThread::ChangePriority(u32 prio) {
 void HLEHelperThread::Resume(WaitType waitType, SceUID uid, int result) {
 	bool res = HLEKernel::ResumeFromWait(id_, waitType, uid, result);
 	if (!res) {
-		ERROR_LOG(HLE, "Failed to wake helper thread from wait");
+		ERROR_LOG(Log::HLE, "Failed to wake helper thread from wait");
 	}
 }
 

@@ -30,27 +30,27 @@ struct FormatBuffer {
 		u32 *as32;
 	};
 
-	inline void Set16(int x, int y, int stride, u16 v) {
+	inline void Set16(int x, int y, int stride, u16 v) const {
 		as16[x + y * stride] = v;
 	}
 
-	inline void Set32(int x, int y, int stride, u32 v) {
+	inline void Set32(int x, int y, int stride, u32 v) const {
 		as32[x + y * stride] = v;
 	}
 
-	inline u16 Get16(int x, int y, int stride) {
+	inline u16 Get16(int x, int y, int stride) const {
 		return as16[x + y * stride];
 	}
 
-	inline u32 Get32(int x, int y, int stride) {
+	inline u32 Get32(int x, int y, int stride) const {
 		return as32[x + y * stride];
 	}
 
-	inline u16 *Get16Ptr(int x, int y, int stride) {
+	inline u16 *Get16Ptr(int x, int y, int stride) const {
 		return &as16[x + y * stride];
 	}
 
-	inline u32 *Get32Ptr(int x, int y, int stride) {
+	inline u32 *Get32Ptr(int x, int y, int stride) const {
 		return &as32[x + y * stride];
 	}
 };
@@ -170,7 +170,7 @@ public:
 	bool GetCurrentStencilbuffer(GPUDebugBuffer &buffer) override;
 	bool GetCurrentTexture(GPUDebugBuffer &buffer, int level, bool *isFramebuffer) override;
 	bool GetCurrentClut(GPUDebugBuffer &buffer) override;
-	bool GetCurrentSimpleVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) override;
+	bool GetCurrentDrawAsDebugVertices(int count, std::vector<GPUDebugVertex> &vertices, std::vector<u16> &indices) override;
 
 	bool DescribeCodePtr(const u8 *ptr, std::string &name) override;
 
@@ -208,6 +208,9 @@ public:
 	void Execute_ImmVertexAlphaPrim(u32 op, u32 diff);
 
 	typedef void (SoftGPU::*CmdFunc)(u32 op, u32 diff);
+
+	void BeginHostFrame() override;
+	bool PresentedThisFrame() const override;
 
 protected:
 	void FastRunLoop(DisplayList &list) override;

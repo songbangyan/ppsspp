@@ -14,7 +14,6 @@ namespace net {
 
 class Connection {
 public:
-	Connection();
 	virtual ~Connection();
 
 	// Inits the sockaddr_in.
@@ -72,7 +71,7 @@ public:
 
 	int SendRequest(const char *method, const RequestParams &req, const char *otherHeaders, net::RequestProgress *progress);
 	int SendRequestWithData(const char *method, const RequestParams &req, const std::string &data, const char *otherHeaders, net::RequestProgress *progress);
-	int ReadResponseHeaders(net::Buffer *readbuf, std::vector<std::string> &responseHeaders, net::RequestProgress *progress);
+	int ReadResponseHeaders(net::Buffer *readbuf, std::vector<std::string> &responseHeaders, net::RequestProgress *progress, std::string *statusLine = nullptr);
 	// If your response contains a response, you must read it.
 	int ReadResponseEntity(net::Buffer *readbuf, const std::vector<std::string> &responseHeaders, Buffer *output, net::RequestProgress *progress);
 
@@ -84,15 +83,20 @@ public:
 		userAgent_ = value;
 	}
 
+	void SetHttpVersion(const char *version) {
+		httpVersion_ = version;
+	}
+
 protected:
 	std::string userAgent_;
+	const char* httpVersion_;
 	double dataTimeout_ = 900.0;
 };
 
 // Really an asynchronous request.
 class HTTPRequest : public Request {
 public:
-	HTTPRequest(RequestMethod method, const std::string &url, const std::string &postData, const std::string &postMime, const Path &outfile, ProgressBarMode progressBarMode = ProgressBarMode::DELAYED, const std::string &name = "");
+	HTTPRequest(RequestMethod method, const std::string &url, const std::string &postData, const std::string &postMime, const Path &outfile, ProgressBarMode progressBarMode = ProgressBarMode::DELAYED, std::string_view name = "");
 	~HTTPRequest();
 
 	void Start() override;
@@ -121,7 +125,7 @@ public:
 private:
 	void Do();  // Actually does the download. Runs on thread.
 	int Perform(const std::string &url);
-	std::string RedirectLocation(const std::string &baseUrl);
+	std::string RedirectLocation(const std::string &baseUrl) const;
 	void SetFailed(int code);
 
 	std::string postData_;

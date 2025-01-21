@@ -1,14 +1,14 @@
 #include <cctype>
-#include <tchar.h>
 #include <cmath>
-#include <iomanip>
 #include <sstream>
 
 #include "ext/xxhash.h"
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
+#include "Core/System.h"
 #include "Core/MemMap.h"
 #include "Core/Reporting.h"
+#include "Core/RetroAchievements.h"
 #include "Windows/W32Util/ContextMenu.h"
 #include "Windows/W32Util/Misc.h"
 #include "Windows/InputBox.h"
@@ -177,6 +177,9 @@ CtrlMemView *CtrlMemView::getFrom(HWND hwnd) {
 
 
 void CtrlMemView::onPaint(WPARAM wParam, LPARAM lParam) {
+	if (Achievements::HardcoreModeActive())
+		return;
+
 	auto memLock = Memory::Lock();
 
 	// draw to a bitmap for double buffering
@@ -427,7 +430,7 @@ void CtrlMemView::onChar(WPARAM wParam, LPARAM lParam) {
 
 	bool active = Core_IsActive();
 	if (active)
-		Core_EnableStepping(true, "memory.access", curAddress_);
+		Core_Break("memory.access", curAddress_);
 
 	if (asciiSelected_) {
 		Memory::WriteUnchecked_U8((u8)wParam, curAddress_);
@@ -452,7 +455,7 @@ void CtrlMemView::onChar(WPARAM wParam, LPARAM lParam) {
 
 	Reporting::NotifyDebugger();
 	if (active)
-		Core_EnableStepping(false);
+		Core_Resume();
 }
 
 void CtrlMemView::redraw() {
@@ -484,6 +487,9 @@ CtrlMemView::GotoMode CtrlMemView::GotoModeFromModifiers(bool isRightClick) {
 }
 
 void CtrlMemView::onMouseDown(WPARAM wParam, LPARAM lParam, int button) {
+	if (Achievements::HardcoreModeActive())
+		return;
+
 	int x = LOWORD(lParam); 
 	int y = HIWORD(lParam);
 
@@ -491,6 +497,9 @@ void CtrlMemView::onMouseDown(WPARAM wParam, LPARAM lParam, int button) {
 }
 
 void CtrlMemView::onMouseUp(WPARAM wParam, LPARAM lParam, int button) {
+	if (Achievements::HardcoreModeActive())
+		return;
+
 	if (button == 2) {
 		int32_t selectedSize = selectRangeEnd_ - selectRangeStart_;
 		bool enable16 = !asciiSelected_ && (selectedSize == 1 || (selectedSize & 1) == 0);
@@ -638,6 +647,9 @@ void CtrlMemView::onMouseUp(WPARAM wParam, LPARAM lParam, int button) {
 }
 
 void CtrlMemView::onMouseMove(WPARAM wParam, LPARAM lParam, int button) {
+	if (Achievements::HardcoreModeActive())
+		return;
+
 	int x = LOWORD(lParam);
 	int y = HIWORD(lParam);
 
@@ -850,7 +862,6 @@ std::vector<u32> CtrlMemView::searchString(const std::string &searchQuery) {
 		return searchResAddrs;
 
 	std::vector<std::pair<u32, u32>> memoryAreas;
-	memoryAreas.reserve(3);
 	memoryAreas.emplace_back(PSP_GetScratchpadMemoryBase(), PSP_GetScratchpadMemoryEnd());
 	// Ignore the video memory mirrors.
 	memoryAreas.emplace_back(PSP_GetVidMemBase(), 0x04200000);
@@ -901,7 +912,6 @@ void CtrlMemView::search(bool continueSearch) {
 	}
 
 	std::vector<std::pair<u32, u32>> memoryAreas;
-	memoryAreas.reserve(3);
 	// Ignore the video memory mirrors.
 	memoryAreas.emplace_back(PSP_GetVidMemBase(), 0x04200000);
 	memoryAreas.emplace_back(PSP_GetKernelMemoryBase(), PSP_GetUserMemoryEnd());

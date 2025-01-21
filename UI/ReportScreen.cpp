@@ -41,7 +41,7 @@ using namespace UI;
 
 class RatingChoice : public LinearLayout {
 public:
-	RatingChoice(const char *captionKey, int *value, LayoutParams *layoutParams = 0);
+	RatingChoice(std::string_view captionKey, int *value, LayoutParams *layoutParams = 0);
 
 	RatingChoice *SetEnabledPtrs(bool *enabled);
 
@@ -54,7 +54,7 @@ protected:
 	virtual int TotalChoices() {
 		return 3;
 	}
-	void AddChoice(int i, const std::string &title);
+	void AddChoice(int i, std::string_view title);
 	StickyChoice *GetChoice(int i) {
 		return static_cast<StickyChoice *>(group_->GetViewByIndex(i));
 	}
@@ -67,7 +67,7 @@ private:
 	int *value_;
 };
 
-RatingChoice::RatingChoice(const char *captionKey, int *value, LayoutParams *layoutParams)
+RatingChoice::RatingChoice(std::string_view captionKey, int *value, LayoutParams *layoutParams)
 		: LinearLayout(ORIENT_VERTICAL, layoutParams), value_(value) {
 	SetSpacing(0.0f);
 
@@ -77,7 +77,7 @@ RatingChoice::RatingChoice(const char *captionKey, int *value, LayoutParams *lay
 	Add(group_);
 
 	group_->SetSpacing(0.0f);
-	SetupChoices();
+	RatingChoice::SetupChoices();
 }
 
 void RatingChoice::Update() {
@@ -109,7 +109,7 @@ void RatingChoice::SetupChoices() {
 	AddChoice(2, rp->T("Great"));
 }
 
-void RatingChoice::AddChoice(int i, const std::string &title) {
+void RatingChoice::AddChoice(int i, std::string_view title) {
 	auto c = group_->Add(new StickyChoice(title, ""));
 	c->OnClick.Handle(this, &RatingChoice::OnChoiceClick);
 }
@@ -147,7 +147,7 @@ protected:
 
 CompatRatingChoice::CompatRatingChoice(const char *captionKey, int *value, LayoutParams *layoutParams)
 		: RatingChoice(captionKey, value, layoutParams) {
-	SetupChoices();
+	CompatRatingChoice::SetupChoices();
 }
 
 void CompatRatingChoice::SetupChoices() {
@@ -161,25 +161,28 @@ void CompatRatingChoice::SetupChoices() {
 }
 
 ReportScreen::ReportScreen(const Path &gamePath)
-	: UIDialogScreenWithGameBackground(gamePath) {
+	: UIDialogScreen(), gamePath_(gamePath) {
 	enableReporting_ = Reporting::IsEnabled();
 	ratingEnabled_ = enableReporting_;
+	// Start computing a CRC immediately, we'll need it on submit.
+	// We won't enable the submit button until it's done.
+	Reporting::QueueCRC(gamePath_);
 }
 
 ScreenRenderFlags ReportScreen::render(ScreenRenderMode mode) {
-	ScreenRenderFlags flags = UIScreen::render(mode);
+	_dbg_assert_(mode & ScreenRenderMode::FIRST);
+	// _dbg_assert_(mode & ScreenRenderMode::TOP);
 
 	if (mode & ScreenRenderMode::TOP) {
-
 		// We do this after render because we need it to be within the frame (so the screenshot works).
 		// We could do it mid frame, but then we have to reapply viewport/scissor.
-		if (!tookScreenshot_) {
+		if (!tookScreenshot_ && !g_Config.bSkipBufferEffects) {
 			Path path = GetSysDirectory(DIRECTORY_SCREENSHOT);
 			if (!File::Exists(path)) {
 				File::CreateDir(path);
 			}
 			screenshotFilename_ = path / ".reporting.jpg";
-			if (TakeGameScreenshot(screenshotFilename_, ScreenshotFormat::JPG, SCREENSHOT_DISPLAY, nullptr, nullptr, 4)) {
+			if (TakeGameScreenshot(screenManager()->getDrawContext(), screenshotFilename_, ScreenshotFormat::JPG, SCREENSHOT_DISPLAY, nullptr, nullptr, 4)) {
 				// Redo the views already, now with a screenshot included.
 				RecreateViews();
 			} else {
@@ -189,6 +192,11 @@ ScreenRenderFlags ReportScreen::render(ScreenRenderMode mode) {
 			tookScreenshot_ = true;
 		}
 	}
+
+	// We take the screenshot first, then we start rendering.
+	// We are the only screen visible so this avoid starting and then trying to resume a backbuffer render pass.
+	ScreenRenderFlags flags = UIScreen::render(mode);
+
 	return flags;
 }
 
@@ -200,12 +208,12 @@ void ReportScreen::update() {
 			screenshot_->SetVisibility(V_GONE);
 		}
 	}
-	UIDialogScreenWithGameBackground::update();
+	UIDialogScreen::update();
 	UpdateCRCInfo();
 }
 
 void ReportScreen::resized() {
-	UIDialogScreenWithGameBackground::resized();
+	UIDialogScreen::resized();
 	RecreateViews();
 }
 
@@ -291,7 +299,7 @@ void ReportScreen::CreateViews() {
 
 	if (tookScreenshot_ && !screenshotFilename_.empty()) {
 		leftColumnItems->Add(new CheckBox(&includeScreenshot_, rp->T("FeedbackIncludeScreen", "Include a screenshot")))->SetEnabledPtr(&enableReporting_);
-		screenshot_ = leftColumnItems->Add(new AsyncImageFileView(screenshotFilename_, IS_KEEP_ASPECT, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, Margins(12, 0))));
+		screenshot_ = leftColumnItems->Add(new AsyncImageFileView(screenshotFilename_, IS_KEEP_ASPECT, new LinearLayoutParams(300, WRAP_CONTENT, Margins(12, 0))));
 	} else {
 		if (tookScreenshot_) {
 			includeScreenshot_ = false;
@@ -312,10 +320,9 @@ void ReportScreen::CreateViews() {
 
 	rightColumnItems->SetSpacing(0.0f);
 	rightColumnItems->Add(new Choice(rp->T("Open Browser")))->OnClick.Handle(this, &ReportScreen::HandleBrowser);
-	showCrcButton_ = new Choice(rp->T("Show disc CRC"));
-	rightColumnItems->Add(showCrcButton_)->OnClick.Handle(this, &ReportScreen::HandleShowCRC);
 	submit_ = new Choice(rp->T("Submit Feedback"));
 	rightColumnItems->Add(submit_)->OnClick.Handle(this, &ReportScreen::HandleSubmit);
+	submit_->SetEnabled(false); // Waiting for CRC
 	UpdateSubmit();
 	UpdateOverallDescription();
 
@@ -343,20 +350,20 @@ void ReportScreen::UpdateCRCInfo() {
 	if (Reporting::HasCRC(gamePath_)) {
 		std::string crc = StringFromFormat("%08X", Reporting::RetrieveCRC(gamePath_));
 		updated = ApplySafeSubstitutions(rp->T("FeedbackCRCValue", "Disc CRC: %1"), crc);
-	} else if (showCRC_) {
+		submit_->SetEnabled(true);
+	} else {
 		updated = rp->T("FeedbackCRCCalculating", "Disc CRC: Calculating...");
 	}
 
 	if (!updated.empty()) {
 		crcInfo_->SetText(updated);
 		crcInfo_->SetVisibility(V_VISIBLE);
-		showCrcButton_->SetEnabled(false);
 	}
 }
 
 void ReportScreen::UpdateOverallDescription() {
 	auto rp = GetI18NCategory(I18NCat::REPORTING);
-	const char *desc;
+	std::string_view desc;
 	uint32_t c = 0xFFFFFFFF;
 	switch (overall_) {
 	case ReportingOverallScore::PERFECT: desc = rp->T("Perfect Description", "Flawless emulation for the entire game - great!"); break;
@@ -400,14 +407,8 @@ EventReturn ReportScreen::HandleBrowser(EventParams &e) {
 	return EVENT_DONE;
 }
 
-EventReturn ReportScreen::HandleShowCRC(EventParams &e) {
-	Reporting::QueueCRC(gamePath_);
-	showCRC_ = true;
-	return EVENT_DONE;
-}
-
 ReportFinishScreen::ReportFinishScreen(const Path &gamePath, ReportingOverallScore score)
-	: UIDialogScreenWithGameBackground(gamePath), score_(score) {
+	: UIDialogScreen(), gamePath_(gamePath), score_(score) {
 }
 
 void ReportFinishScreen::CreateViews() {
@@ -468,7 +469,7 @@ void ReportFinishScreen::update() {
 		}
 	}
 
-	UIDialogScreenWithGameBackground::update();
+	UIDialogScreen::update();
 }
 
 void ReportFinishScreen::ShowSuggestions() {
@@ -486,7 +487,7 @@ void ReportFinishScreen::ShowSuggestions() {
 		bool shownConfig = false;
 		bool valid = false;
 		for (const auto &item : suggestions) {
-			const char *suggestion = nullptr;
+			std::string_view suggestion = "";
 			if (item == "Upgrade") {
 				suggestion = rp->T("SuggestionUpgrade", "Upgrade to a newer PPSSPP build");
 			} else if (item == "Downgrade") {
@@ -504,15 +505,15 @@ void ReportFinishScreen::ShowSuggestions() {
 				// Ignore unknown configs, hopefully we recognized "Upgrade" at least.
 			}
 
-			if (suggestion) {
+			if (!suggestion.empty()) {
 				valid = true;
-				resultItems_->Add(new TextView(std::string(" - ") + suggestion, FLAG_WRAP_TEXT, false))->SetShadow(true);
+				resultItems_->Add(new TextView(std::string(" - ") + std::string(suggestion), FLAG_WRAP_TEXT, false))->SetShadow(true);
 			}
 		}
 
 		if (!valid) {
 			// No actual valid versions.  Let's just say upgrade and hope the server's not broken.
-			resultItems_->Add(new TextView(std::string(" - ") + rp->T("SuggestionUpgrade", "Upgrade to a newer PPSSPP build"), FLAG_WRAP_TEXT, false))->SetShadow(true);
+			resultItems_->Add(new TextView(std::string(" - ") + rp->T_cstr("SuggestionUpgrade", "Upgrade to a newer PPSSPP build"), FLAG_WRAP_TEXT, false))->SetShadow(true);
 		}
 	}
 }

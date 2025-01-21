@@ -24,9 +24,12 @@
 
 class IndexGenerator {
 public:
-	void Setup(u16 *indexptr);
+	void Setup(u16 *indexptr) {
+		indsBase_ = indexptr;
+		inds_ = indexptr;
+	}
 	void Reset() {
-		this->inds_ = indsBase_;
+		inds_ = indsBase_;
 	}
 
 	static bool PrimCompatible(int prim1, int prim2) {
@@ -51,7 +54,7 @@ public:
 	void TranslatePrim(int prim, int numInds, const u32_le *inds, int indexOffset, bool clockwise);
 
 	// This is really the number of generated indices, or 3x the number of triangles.
-	int VertexCount() const { return inds_ - indsBase_; }
+	int VertexCount() const { return (int)(inds_ - indsBase_); }
 
 private:
 	// Points (why index these? code simplicity)

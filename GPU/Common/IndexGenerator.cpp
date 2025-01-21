@@ -18,21 +18,9 @@
 #include <cstring>
 
 #include "ppsspp_config.h"
-#include "CPUDetect.h"
-#include "Common.h"
 
-#ifdef _M_SSE
-#include <emmintrin.h>
-#endif
-#if PPSSPP_ARCH(ARM_NEON)
-
-#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
-#include <arm64_neon.h>
-#else
-#include <arm_neon.h>
-#endif
-#endif
-#include "IndexGenerator.h"
+#include "Common/Math/SIMDHeaders.h"
+#include "GPU/Common/IndexGenerator.h"
 
 // Points don't need indexing...
 const u8 IndexGenerator::indexedPrimitiveType[7] = {
@@ -44,11 +32,6 @@ const u8 IndexGenerator::indexedPrimitiveType[7] = {
 	GE_PRIM_TRIANGLES,
 	GE_PRIM_RECTANGLES,
 };
-
-void IndexGenerator::Setup(u16 *inds) {
-	this->indsBase_ = inds;
-	Reset();
-}
 
 void IndexGenerator::AddPrim(int prim, int vertexCount, int indexOffset, bool clockwise) {
 	switch (prim) {
@@ -83,13 +66,13 @@ void IndexGenerator::AddList(int numVerts, int indexOffset, bool clockwise) {
 
 alignas(16) static const u16 offsets_clockwise[24] = {
 	0, (u16)(0 + 1), (u16)(0 + 2),
-	1, (u16)(1 + 2), (u16)(1 + 1),
+	(u16)(1 + 1), 1, (u16)(1 + 2),
 	2, (u16)(2 + 1), (u16)(2 + 2),
-	3, (u16)(3 + 2), (u16)(3 + 1),
+	(u16)(3 + 1), 3, (u16)(3 + 2),
 	4, (u16)(4 + 1), (u16)(4 + 2),
-	5, (u16)(5 + 2), (u16)(5 + 1),
+	(u16)(5 + 1), 5, (u16)(5 + 2),
 	6, (u16)(6 + 1), (u16)(6 + 2),
-	7, (u16)(7 + 2), (u16)(7 + 1),
+	(u16)(7 + 1), 7, (u16)(7 + 2),
 };
 
 alignas(16) static const uint16_t offsets_counter_clockwise[24] = {
@@ -195,6 +178,7 @@ void IndexGenerator::AddStrip(int numVerts, int indexOffset, bool clockwise) {
 #endif
 }
 
+// God of War uses this for text. Otherwise rare, not much reason to optimize.
 void IndexGenerator::AddFan(int numVerts, int indexOffset, bool clockwise) {
 	const int numTris = numVerts - 2;
 	u16 *outInds = inds_;
@@ -211,6 +195,7 @@ void IndexGenerator::AddFan(int numVerts, int indexOffset, bool clockwise) {
 //Lines
 void IndexGenerator::AddLineList(int numVerts, int indexOffset) {
 	u16 *outInds = inds_;
+	numVerts &= ~1;
 	for (int i = 0; i < numVerts; i += 2) {
 		*outInds++ = indexOffset + i;
 		*outInds++ = indexOffset + i + 1;

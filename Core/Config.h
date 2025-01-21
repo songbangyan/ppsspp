@@ -70,11 +70,13 @@ public:
 	bool bFirstRun;
 	bool bGameSpecific = false;
 	bool bUpdatedInstanceCounter = false;
+	bool bBrowse;  // show a file browser on startup. TODO: Does anyone use this?
 
 	int iRunCount; // To be used to for example check for updates every 10 runs and things like that.
 
+	// Debugger
 	bool bAutoRun;  // start immediately
-	bool bBrowse; // when opening the emulator, immediately show a file browser
+	bool bBreakOnFrameTimeout;  // not saved
 
 	// General
 	bool bScreenshotsAsPNG;
@@ -128,7 +130,10 @@ public:
 	bool bRemoteISOManual;
 	bool bRemoteShareOnStartup;
 	std::string sRemoteISOSubdir;
+	std::string sRemoteISOSharedDir;
+	int iRemoteISOShareType;
 	bool bRemoteDebuggerOnStartup;
+	bool bRemoteTab;
 	bool bMemStickInserted;
 	int iMemStickSizeGB;
 	bool bLoadPlugins;
@@ -142,12 +147,12 @@ public:
 
 	std::string sIgnoreCompatSettings;
 
-	bool bDiscordPresence;  // Enables setting the Discord presence to the current game (or menu)
+	bool bDiscordRichPresence;  // Enables setting the Discord presence to the current game (or menu)
 
 	// GFX
 	int iGPUBackend;
-	std::string customDriver;
-	std::string sFailedGPUBackends;
+	std::string sCustomDriver;
+	std::string sFailedGPUBackends;  // NOT stored in ppsspp.ini anymore!
 	std::string sDisabledGPUBackends;
 	// We have separate device parameters for each backend so it doesn't get erased if you switch backends.
 	// If not set, will use the "best" device.
@@ -155,7 +160,9 @@ public:
 	std::string sD3D11Device;  // Windows only
 	std::string sCameraDevice;
 	std::string sMicDevice;
+	bool bCameraMirrorHorizontal;
 	int iDisplayFramerateMode;  // enum DisplayFramerateMode. Android-only.
+	int iDisplayRefreshRate = 60;
 
 	bool bSoftwareRendering;
 	bool bSoftwareRenderingJit;
@@ -167,8 +174,10 @@ public:
 	// Speedhacks (more will be moved here):
 	bool bSkipBufferEffects;
 	bool bDisableRangeCulling;
+	int iDepthRasterMode;
 
 	int iTexFiltering; // 1 = auto , 2 = nearest , 3 = linear , 4 = auto max quality
+	bool bSmart2DTexFiltering;
 
 	bool bDisplayStretch;  // Automatically matches the aspect ratio of the window.
 	int iDisplayFilter;    // 1 = linear, 2 = nearest
@@ -176,12 +185,15 @@ public:
 	float fDisplayOffsetY;
 	float fDisplayScale;   // Relative to the most constraining axis (x or y).
 	bool bDisplayIntegerScale;  // Snaps scaling to integer scale factors in raw pixels.
+	bool bDisplayCropTo16x9;  // Crops to 16:9 if the resolution is very close.
 	float fDisplayAspectRatio;  // Stored relative to the PSP's native ratio, so 1.0 is the normal pixel aspect ratio.
 
 	bool bImmersiveMode;  // Mode on Android Kitkat 4.4 and later that hides the back button etc.
 	bool bSustainedPerformanceMode;  // Android: Slows clocks down to avoid overheating/speed fluctuations.
 	bool bIgnoreScreenInsets;  // Android: Center screen disregarding insets if this is enabled.
 	bool bVSync;
+
+	bool bShowImDebugger;
 
 	int iFrameSkip;
 	int iFrameSkipType;
@@ -204,6 +216,7 @@ public:
 
 	bool bTextureBackoffCache;
 	bool bVertexDecoderJit;
+	int iAppSwitchMode;
 	bool bFullScreen;
 	bool bFullScreenMulti;
 	int iForceFullScreen = -1; // -1 = nope, 0 = force off, 1 = force on (not saved.)
@@ -232,7 +245,8 @@ public:
 	int iAutoLoadSaveState; // 0 = off, 1 = oldest, 2 = newest, >2 = slot number + 3
 	bool bEnableCheats;
 	bool bReloadCheats;
-	int iCwCheatRefreshRate;
+	bool bEnablePlugins;
+	int iCwCheatRefreshIntervalMs;
 	float fCwCheatScrollPosition;
 	float fGameListScrollPosition;
 	int iBloomHack; //0 = off, 1 = safe, 2 = balanced, 3 = aggressive
@@ -242,6 +256,7 @@ public:
 	bool bShaderCache;  // Hidden ini-only setting, useful for debugging shader compile times.
 	bool bUberShaderVertex;
 	bool bUberShaderFragment;
+	int iDefaultTab;
 
 	std::vector<std::string> vPostShaderNames; // Off for chain end (only Off for no shader)
 	std::map<std::string, float> mPostShaderSetting;
@@ -258,15 +273,24 @@ public:
 	bool bRenderDuplicateFrames;
 	bool bRenderMultiThreading;
 
+	// HW debug
+	bool bShowGPOLEDs;
+
 	// Sound
 	bool bEnableSound;
 	int iAudioBackend;
 	int iGlobalVolume;
 	int iReverbVolume;
 	int iAltSpeedVolume;
+	int iAchievementSoundVolume;
 	bool bExtraAudioBuffering;  // For bluetooth
 	std::string sAudioDevice;
 	bool bAutoAudioDevice;
+	bool bUseExperimentalAtrac;
+
+	// iOS only for now
+	bool bAudioMixWithOthers;
+	bool bAudioRespectSilentMode;
 
 	// UI
 	bool bShowDebuggerOnLoad;
@@ -396,8 +420,12 @@ public:
 	// Sets up how much the analog limiter button restricts digital->analog input.
 	float fAnalogLimiterDeadzone;
 
+	// Trigger configuration
+	float fAnalogTriggerThreshold;
+
 	// Sets whether combo mapping is enabled.
 	bool bAllowMappingCombos;
+	bool bStrictComboOrder;
 
 	bool bMouseControl;
 	bool bMapMouse; // Workaround for mapping screen:|
@@ -416,8 +444,9 @@ public:
 	bool bDiscardRegsOnJRRA;
 
 	// SystemParam
-	std::string sNickName;
+	std::string sNickName;  // AdHoc and system nickname
 	std::string sMACAddress;
+
 	int iLanguage;
 	int iTimeFormat;
 	int iDateFormat;
@@ -429,9 +458,15 @@ public:
 	bool bSavedataUpgrade;
 
 	// Networking
-	std::string proAdhocServer;
-	bool bEnableWlan;
 	bool bEnableAdhocServer;
+	std::string proAdhocServer;
+	std::string sInfrastructureDNSServer;
+	std::string sInfrastructureUsername;  // Username used for Infrastructure play. Different restrictions.
+	bool bInfrastructureAutoDNS;
+	bool bAllowSavestateWhileConnected;  // Developer option, ini-only. No normal users need this, it's always wrong to save/load state when online.
+
+	bool bEnableWlan;
+	std::map<std::string, std::string> mHostToAlias;  // Local DNS database stored in ini file
 	bool bEnableUPnP;
 	bool bUPnPUseOriginalPort;
 	bool bForcedFirstConnect;
@@ -440,7 +475,7 @@ public:
 	int iWlanAdhocChannel;
 	bool bWlanPowerSave;
 	bool bEnableNetworkChat;
-	//for chat position , moveable buttons is better than this 
+
 	int iChatButtonPosition;
 	int iChatScreenPosition;
 
@@ -455,26 +490,25 @@ public:
 	int iFirmwareVersion;
 	bool bBypassOSKWithKeyboard;
 
+
 	// Virtual reality
 	bool bEnableVR;
 	bool bEnable6DoF;
 	bool bEnableStereo;
-	bool bEnableMotions;
+	bool bEnableImmersiveVR;
 	bool bForce72Hz;
+	bool bForceVR;
 	bool bManualForceVR;
 	bool bPassthrough;
 	bool bRescaleHUD;
 	float fCameraDistance;
 	float fCameraHeight;
 	float fCameraSide;
+	float fCameraPitch;
 	float fCanvasDistance;
 	float fCanvas3DDistance;
+	float fFieldOfViewPercentage;
 	float fHeadUpDisplayScale;
-	float fMotionLength;
-	float fHeadRotationScale;
-	bool bHeadRotationEnabled;
-	bool bHeadRotationSmoothing;
-	int iCameraPitch;
 
 	// Debugger
 	int iDisasmWindowX;
@@ -512,14 +546,16 @@ public:
 	// Retro Achievement settings
 	// Copied from Duckstation, we might want to remove some.
 	bool bAchievementsEnable;
-	bool bAchievementsChallengeMode;
+	bool bAchievementsHardcoreMode;
 	bool bAchievementsEncoreMode;
 	bool bAchievementsUnofficial;
 	bool bAchievementsSoundEffects;
 	bool bAchievementsLogBadMemReads;
 	bool bAchievementsSaveStateInHardcoreMode;
+	bool bAchievementsEnableRAIntegration;
 
 	// Positioning of the various notifications
+	int iNotificationPos;
 	int iAchievementsLeaderboardTrackerPos;
 	int iAchievementsLeaderboardStartedOrFailedPos;
 	int iAchievementsLeaderboardSubmittedPos;
@@ -562,11 +598,11 @@ public:
 	bool loadGameConfig(const std::string &game_id, const std::string &title);
 	bool saveGameConfig(const std::string &pGameId, const std::string &title);
 	void unloadGameConfig();
-	Path getGameConfigFile(const std::string &gameId);
+	Path getGameConfigFile(const std::string &gameId, bool *exists);
 	bool hasGameConfig(const std::string &game_id);
 
 	void SetSearchPath(const Path &path);
-	const Path FindConfigFile(const std::string &baseFilename);
+	const Path FindConfigFile(const std::string &baseFilename, bool *exists);
 
 	void UpdateIniLocation(const char *iniFileName = nullptr, const char *controllerIniFilename = nullptr);
 
@@ -584,7 +620,7 @@ public:
 
 	bool IsPortrait() const;
 	int NextValidBackend();
-	bool IsBackendEnabled(GPUBackend backend, bool validate = true);
+	bool IsBackendEnabled(GPUBackend backend);
 
 	bool UseFullScreen() const {
 		if (iForceFullScreen != -1)
@@ -596,7 +632,7 @@ public:
 	bool HasRecentIsos() const;
 	void ClearRecentIsos();
 
-	const std::map<std::string, std::pair<std::string, int>> &GetLangValuesMapping();
+	const std::map<std::string, std::pair<std::string, int>, std::less<>> &GetLangValuesMapping();
 	bool LoadAppendedConfig();
 	void SetAppendedConfigIni(const Path &path);
 	void UpdateAfterSettingAutoFrameSkip();
@@ -620,7 +656,7 @@ private:
 	std::string gameId_;
 	std::string gameIdTitle_;
 	std::vector<std::string> recentIsos;
-	std::map<std::string, std::pair<std::string, int>> langValuesMapping_;
+	std::map<std::string, std::pair<std::string, int>, std::less<>> langValuesMapping_;
 	PlayTimeTracker playTimeTracker_;
 	Path iniFilename_;
 	Path controllerIniFilename_;

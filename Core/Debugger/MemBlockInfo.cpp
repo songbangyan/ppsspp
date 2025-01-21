@@ -17,14 +17,15 @@
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <condition_variable>
 #include <thread>
 
 #include "Common/Log.h"
 #include "Common/Serialize/Serializer.h"
 #include "Common/Serialize/SerializeFuncs.h"
+#include "Common/Thread/ThreadUtil.h"
 #include "Core/Config.h"
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/Breakpoints.h"
@@ -279,7 +280,7 @@ void MemSlabMap::Clear() {
 			delete s;
 		s = next;
 	}
-	delete bulkStorage_;
+	delete [] bulkStorage_;
 	bulkStorage_ = nullptr;
 	first_ = nullptr;
 	lastFind_ = nullptr;
@@ -288,12 +289,7 @@ void MemSlabMap::Clear() {
 
 MemSlabMap::Slab *MemSlabMap::FindSlab(uint32_t addr) {
 	// Jump ahead using our index.
-	size_t slabIndex = addr / SLICE_SIZE;
-	if (slabIndex >= heads_.size()) {
-		// Shouldn't happen, but apparently can.
-		return nullptr;
-	}
-	Slab *slab = heads_[slabIndex];
+	Slab *slab = heads_[addr / SLICE_SIZE];
 	// We often move forward, so check the last find.
 	if (lastFind_->start > slab->start && lastFind_->start <= addr)
 		slab = lastFind_;
@@ -529,9 +525,9 @@ void NotifyMemInfoPC(MemBlockFlags flags, uint32_t start, uint32_t size, uint32_
 
 	if (!(flags & MemBlockFlags::SKIP_MEMCHECK)) {
 		if (flags & MemBlockFlags::WRITE) {
-			CBreakPoints::ExecMemCheck(start, true, size, pc, tagStr);
+			g_breakpoints.ExecMemCheck(start, true, size, pc, tagStr);
 		} else if (flags & MemBlockFlags::READ) {
-			CBreakPoints::ExecMemCheck(start, false, size, pc, tagStr);
+			g_breakpoints.ExecMemCheck(start, false, size, pc, tagStr);
 		}
 	}
 }
@@ -545,7 +541,7 @@ void NotifyMemInfoCopy(uint32_t destPtr, uint32_t srcPtr, uint32_t size, const c
 		return;
 
 	bool needsFlush = false;
-	if (CBreakPoints::HasMemChecks()) {
+	if (g_breakpoints.HasMemChecks()) {
 		// This will cause a flush, but it's needed to trigger memchecks with proper data.
 		char tagData[128];
 		size_t tagSize = FormatMemWriteTagAt(tagData, sizeof(tagData), prefix, srcPtr, size);
@@ -680,6 +676,8 @@ size_t FormatMemWriteTagAtNoFlush(char *buf, size_t sz, const char *prefix, uint
 }
 
 static void FlushMemInfoThread() {
+	SetCurrentThreadName("FlushMemInfo");
+
 	while (flushThreadRunning.load()) {
 		flushThreadPending = false;
 		FlushPendingMemInfo();

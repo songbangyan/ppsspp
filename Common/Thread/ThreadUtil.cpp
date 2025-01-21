@@ -2,11 +2,7 @@
 
 #if PPSSPP_PLATFORM(WINDOWS)
 
-#include <windows.h>
-
-#ifdef __MINGW32__
-#include <excpt.h>
-#endif
+#include "Common/CommonWindows.h"
 
 #define TLS_SUPPORTED
 
@@ -197,19 +193,11 @@ void SetCurrentThreadNameThroughException(const char *threadName) {
 	info.dwThreadID = -1; //dwThreadID;
 	info.dwFlags = 0;
 
-#ifdef __MINGW32__
-	__try1 (ehandler)
-#else
 	__try
-#endif
 	{
 		RaiseException(MS_VC_EXCEPTION, 0, sizeof(info)/sizeof(ULONG_PTR), (ULONG_PTR*)&info);
 	}
-#ifdef __MINGW32__
-	__except1
-#else
 	__except(EXCEPTION_CONTINUE_EXECUTION)
-#endif
 	{}
 #endif
 }
@@ -218,7 +206,7 @@ void SetCurrentThreadNameThroughException(const char *threadName) {
 void AssertCurrentThreadName(const char *threadName) {
 #ifdef TLS_SUPPORTED
 	if (strcmp(curThreadName, threadName) != 0) {
-		ERROR_LOG(SYSTEM, "Thread name assert failed: Expected %s, was %s", threadName, curThreadName);
+		ERROR_LOG(Log::System, "Thread name assert failed: Expected %s, was %s", threadName, curThreadName);
 	}
 #endif
 }

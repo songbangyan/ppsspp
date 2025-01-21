@@ -48,11 +48,20 @@
 
 #include "Common/Data/Collections/TinySet.h"
 #include "Common/Data/Collections/FastVec.h"
+#include "Common/Data/Collections/CharQueue.h"
 #include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Data/Text/Parsers.h"
 #include "Common/Data/Text/WrapText.h"
 #include "Common/Data/Encoding/Utf8.h"
+#include "Common/Buffer.h"
 #include "Common/File/Path.h"
+#include "Common/Math/SIMDHeaders.h"
+#include "Common/Math/CrossSIMD.h"
+// Get some more instructions for testing
+#if PPSSPP_ARCH(SSE2)
+#include <immintrin.h>
+#endif
+
 #include "Common/Input/InputState.h"
 #include "Common/Math/math_util.h"
 #include "Common/Render/DrawBuffer.h"
@@ -60,6 +69,7 @@
 #include "Common/System/System.h"
 #include "Common/Thread/ThreadUtil.h"
 #include "Common/Data/Format/IniFile.h"
+#include "Common/TimeUtil.h"
 
 #include "Common/ArmEmitter.h"
 #include "Common/BitScan.h"
@@ -67,6 +77,7 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 #include "Core/Config.h"
+#include "Common/Data/Convert/ColorConv.h"
 #include "Common/File/VFS/VFS.h"
 #include "Common/File/VFS/DirectoryReader.h"
 #include "Core/FileSystems/ISOFileSystem.h"
@@ -85,7 +96,7 @@
 
 std::string System_GetProperty(SystemProperty prop) { return ""; }
 std::vector<std::string> System_GetPropertyStringVec(SystemProperty prop) { return std::vector<std::string>(); }
-int System_GetPropertyInt(SystemProperty prop) {
+int64_t System_GetPropertyInt(SystemProperty prop) {
 	return -1;
 }
 float System_GetPropertyFloat(SystemProperty prop) {
@@ -106,8 +117,9 @@ void System_AudioClear() {}
 void System_AudioPushSamples(const s32 *audio, int numSamples) {}
 
 // TODO: To avoid having to define these here, these should probably be turned into system "requests".
-bool NativeSaveSecret(const char *nameOfSecret, const std::string &data) { return false; }
-std::string NativeLoadSecret(const char *nameOfSecret) {
+// To clear the secret entirely, just save an empty string.
+bool NativeSaveSecret(std::string_view nameOfSecret, std::string_view data) { return false; }
+std::string NativeLoadSecret(std::string_view nameOfSecret) {
 	return "";
 }
 
@@ -478,7 +490,7 @@ bool TestMatrixTranspose() {
 }
 
 void TestGetMatrix(int matrix, MatrixSize sz) {
-	INFO_LOG(SYSTEM, "Testing matrix %s", GetMatrixNotation(matrix, sz).c_str());
+	INFO_LOG(Log::System, "Testing matrix %s", GetMatrixNotation(matrix, sz).c_str());
 	u8 fullMatrix[16];
 
 	u8 cols[4];
@@ -496,8 +508,8 @@ void TestGetMatrix(int matrix, MatrixSize sz) {
 		// int rowName = GetRowName(matrix, sz, i, 0);
 		int colName = cols[i];
 		int rowName = rows[i];
-		INFO_LOG(SYSTEM, "Column %i: %s", i, GetVectorNotation(colName, vsz).c_str());
-		INFO_LOG(SYSTEM, "Row %i: %s", i, GetVectorNotation(rowName, vsz).c_str());
+		INFO_LOG(Log::System, "Column %i: %s", i, GetVectorNotation(colName, vsz).c_str());
+		INFO_LOG(Log::System, "Row %i: %s", i, GetVectorNotation(rowName, vsz).c_str());
 
 		u8 colRegs[4];
 		u8 rowRegs[4];
@@ -518,12 +530,12 @@ void TestGetMatrix(int matrix, MatrixSize sz) {
 			c << (int)fullMatrix[j * 4 + i] << " ";
 			d << (int)rowRegs[j] << " ";
 		}
-		INFO_LOG(SYSTEM, "Col: %s vs %s", a.str().c_str(), b.str().c_str());
+		INFO_LOG(Log::System, "Col: %s vs %s", a.str().c_str(), b.str().c_str());
 		if (a.str() != b.str())
-			INFO_LOG(SYSTEM, "WRONG!");
-		INFO_LOG(SYSTEM, "Row: %s vs %s", c.str().c_str(), d.str().c_str());
+			INFO_LOG(Log::System, "WRONG!");
+		INFO_LOG(Log::System, "Row: %s vs %s", c.str().c_str(), d.str().c_str());
 		if (c.str() != d.str())
-			INFO_LOG(SYSTEM, "WRONG!");
+			INFO_LOG(Log::System, "WRONG!");
 	}
 }
 
@@ -788,15 +800,15 @@ static bool TestAndroidContentURI() {
 
 class UnitTestWordWrapper : public WordWrapper {
 public:
-	UnitTestWordWrapper(const char *str, float maxW, int flags)
+	UnitTestWordWrapper(std::string_view str, float maxW, int flags)
 		: WordWrapper(str, maxW, flags) {
 	}
 
 protected:
-	float MeasureWidth(const char *str, size_t bytes) override {
+	float MeasureWidth(std::string_view str) override {
 		// Simple case for unit testing.
 		int w = 0;
-		for (UTF8 utf(str); !utf.end() && (size_t)utf.byteIndex() < bytes; ) {
+		for (UTF8 utf(str); !utf.end(); ) {
 			uint32_t c = utf.next();
 			switch (c) {
 			case ' ':
@@ -984,16 +996,150 @@ bool TestIniFile() {
 	const std::string testLine2 = "# Just a comment";
 
 	std::string temp;
-	ParsedIniLine line;
-	line.ParseFrom(testLine);
+	ParsedIniLine line(testLine);
 	line.Reconstruct(&temp);
 	EXPECT_EQ_STR(testLine, temp);
 
 	temp.clear();
-	line.ParseFrom(testLine2);
-	line.Reconstruct(&temp);
+	ParsedIniLine line2(testLine2);
+	line2.Reconstruct(&temp);
 
 	EXPECT_EQ_STR(testLine2, temp);
+	return true;
+}
+
+inline u32 ReferenceRGBA5551ToRGBA8888(u16 src) {
+	u8 r = Convert5To8((src >> 0) & 0x1F);
+	u8 g = Convert5To8((src >> 5) & 0x1F);
+	u8 b = Convert5To8((src >> 10) & 0x1F);
+	u8 a = (src >> 15) & 0x1;
+	a = (a) ? 0xff : 0;
+	return (a << 24) | (b << 16) | (g << 8) | r;
+}
+
+inline u32 ReferenceRGB565ToRGBA8888(u16 src) {
+	u8 r = Convert5To8((src >> 0) & 0x1F);
+	u8 g = Convert6To8((src >> 5) & 0x3F);
+	u8 b = Convert5To8((src >> 11) & 0x1F);
+	u8 a = 0xFF;
+	return (a << 24) | (b << 16) | (g << 8) | r;
+}
+
+bool TestColorConv() {
+	// Can exhaustively test the 16->32 conversions.
+	for (int i = 0; i < 65536; i++) {
+		u16 col16 = i;
+
+		u32 reference = ReferenceRGBA5551ToRGBA8888(col16);
+		u32 value = RGBA5551ToRGBA8888(col16);
+		EXPECT_EQ_INT(reference, value);
+
+		reference = ReferenceRGB565ToRGBA8888(col16);
+		value = RGB565ToRGBA8888(col16);
+		EXPECT_EQ_INT(reference, value);
+	}
+
+	return true;
+}
+
+CharQueue GetQueue() {
+	CharQueue queue(5);
+	return queue;
+}
+
+bool TestCharQueue() {
+	// We use a tiny block size for testing.
+	CharQueue queue = GetQueue();
+
+	// Add 16 chars.
+	queue.push_back("abcdefghijkl");
+	queue.push_back("mnop");
+
+	std::string testStr;
+	queue.iterate_blocks([&](const char *buf, size_t sz) {
+		testStr.append(buf, sz);
+		return true;
+	});
+	EXPECT_EQ_STR(testStr, std::string("abcdefghijklmnop"));
+
+	EXPECT_EQ_CHAR(queue.peek(11), 'l');
+	EXPECT_EQ_CHAR(queue.peek(12), 'm');
+	EXPECT_EQ_CHAR(queue.peek(15), 'p');
+	EXPECT_EQ_INT(queue.block_count(), 3);  // Didn't fit in the first block, so the two pushes above should have each created one additional block.
+	EXPECT_EQ_INT(queue.size(), 16);
+	char dest[15];
+	EXPECT_EQ_INT(queue.pop_front_bulk(dest, 4), 4);
+	EXPECT_EQ_INT(queue.size(), 12);
+	EXPECT_EQ_MEM(dest, "abcd", 4);
+	EXPECT_EQ_INT(queue.pop_front_bulk(dest, 6), 6);
+	EXPECT_EQ_INT(queue.size(), 6);
+	EXPECT_EQ_MEM(dest, "efghij", 6);
+	queue.push_back("qr");
+	EXPECT_EQ_INT(queue.pop_front_bulk(dest, 4), 4);  // should pop off klmn
+	EXPECT_EQ_MEM(dest, "klmn", 4);
+	EXPECT_EQ_INT(queue.size(), 4);
+	EXPECT_EQ_CHAR(queue.peek(3), 'r');
+	queue.pop_front_bulk(dest, 4);
+	EXPECT_EQ_MEM(dest, "opqr", 4);
+	EXPECT_TRUE(queue.empty());
+	queue.push_back("asdf");
+	EXPECT_EQ_INT(queue.next_crlf_offset(), -1);
+	queue.push_back("\r\r\n");
+	EXPECT_EQ_INT(queue.next_crlf_offset(), 5);
+	return true;
+}
+
+bool TestBuffer() {
+	Buffer b = Buffer::Void();
+	b.Append("hello");
+	b.Append("world");
+	std::string temp;
+	b.Take(10, &temp);
+	EXPECT_EQ_STR(temp, std::string("helloworld"));
+	return true;
+}
+
+#if defined(__GNUC__) || defined(__clang__) || defined(__INTEL_COMPILER)
+[[gnu::target("sse4.1")]]
+#endif
+bool TestSIMD() {
+#if PPSSPP_ARCH(SSE2)
+	__m128i x = _mm_set_epi16(0, 0x4444, 0, 0x3333, 0, 0x2222, 0, 0x1111);
+	__m128i y = _mm_packu_epi32_SSE2(x);
+
+	uint64_t testdata[2];
+	_mm_store_si128((__m128i *)testdata, y);
+	EXPECT_EQ_INT(testdata[0], 0x4444333322221111);
+	EXPECT_EQ_INT(testdata[1], 0);
+
+	__m128i a = _mm_set_epi16(0, 0x4444, 0, 0x3333, 0, 0x2222, 0, 0x1111);
+	__m128i b = _mm_set_epi16(0, (int16_t)0x8888, 0, 0x7777, 0, 0x6666, 0, 0x5555);
+	__m128i c = _mm_packu2_epi32_SSE2(a, b);
+	__m128i d = _mm_packu1_epi32_SSE2(b);
+
+	uint64_t testdata2[4];
+	_mm_store_si128((__m128i *)testdata2, c);
+	_mm_store_si128((__m128i *)testdata2 + 1, d);
+	EXPECT_EQ_INT(testdata2[0], 0x4444333322221111);
+	EXPECT_EQ_INT(testdata2[1], 0x8888777766665555);
+	EXPECT_EQ_INT(testdata2[2], 0x8888777766665555);
+	EXPECT_EQ_INT(testdata2[2], 0x8888777766665555);
+#endif
+
+	const int testval[2][4] = {
+		{ 0x1000, 0x2000, 0x3000, 0x7000 },
+		{ -0x1000, -0x2000, -0x3000, -0x7000 }
+	};
+
+	for (int i = 0; i < 2; i++) {
+		Vec4S32 s = Vec4S32::Load(testval[i]);
+		Vec4S32 square = s * s;
+		Vec4S32 square16 = s.Mul16(s);
+		EXPECT_EQ_INT(square[0], square16[0]);
+		EXPECT_EQ_INT(square[1], square16[1]);
+		EXPECT_EQ_INT(square[2], square16[2]);
+		EXPECT_EQ_INT(square[3], square16[3]);
+	}
 	return true;
 }
 
@@ -1056,11 +1202,20 @@ TestItem availableTests[] = {
 	TEST_ITEM(VFS),
 	TEST_ITEM(Substitutions),
 	TEST_ITEM(IniFile),
+	TEST_ITEM(ColorConv),
+	TEST_ITEM(CharQueue),
+	TEST_ITEM(Buffer),
+	TEST_ITEM(SIMD),
 };
 
 int main(int argc, const char *argv[]) {
 	SetCurrentThreadName("UnitTest");
+	TimeInit();
 
+	printf("CPU name: %s\n", cpu_info.cpu_string);
+	printf("ABI: %s\n", GetCompilerABI());
+
+	// In case we're on ARM, assume these are available.
 	cpu_info.bNEON = true;
 	cpu_info.bVFP = true;
 	cpu_info.bVFPv3 = true;
@@ -1096,10 +1251,11 @@ int main(int argc, const char *argv[]) {
 			printf("%d tests passed.\n", passes);
 		}
 		if (fails > 0) {
+			printf("%d tests failed!\n", fails);
 			return 2;
 		}
 	} else if (testFunc == nullptr) {
-		fprintf(stderr, "You may select a test to run by passing an argument.\n");
+		fprintf(stderr, "You may select a test to run by passing an argument, either \"all\" or one or more of the below.\n");
 		fprintf(stderr, "\n");
 		fprintf(stderr, "Available tests:\n");
 		for (auto f : availableTests) {

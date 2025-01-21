@@ -3,9 +3,10 @@
 #include <mutex>
 #include "Common/Data/Encoding/Utf8.h"
 #include "Core/Core.h"
+#include "Core/System.h"
 #include "Core/HLE/ReplaceTables.h"
 #include "Core/MemMap.h"
-#include "Core/MIPS/JitCommon/JitBlockCache.h"
+#include "Core/MIPS/MIPSDebugInterface.h"
 #include "Windows/Debugger/DumpMemoryWindow.h"
 #include "Windows/resource.h"
 #include "Windows/W32Util/ShellUtil.h"
@@ -82,7 +83,7 @@ INT_PTR CALLBACK DumpMemoryWindow::dlgFunc(HWND hwnd, UINT iMsg, WPARAM wParam, 
 				bool priorDumpWasStepping = Core_IsStepping();
 				if (!priorDumpWasStepping && PSP_IsInited()) {
 					// If emulator isn't paused force paused state, but wait before locking.
-					Core_EnableStepping(true, "memory.access", bp->start);
+					Core_Break("memory.access", bp->start);
 					Core_WaitInactive();
 				}
 
@@ -117,7 +118,7 @@ INT_PTR CALLBACK DumpMemoryWindow::dlgFunc(HWND hwnd, UINT iMsg, WPARAM wParam, 
 				fclose(output);
 				if (!priorDumpWasStepping) {
 					// If emulator wasn't paused before memory dump resume emulation automatically.
-					Core_EnableStepping(false);
+					Core_Resume();
 				}
 
 				MessageBoxA(hwnd, "Done.", "Information", MB_OK);
@@ -149,8 +150,8 @@ bool DumpMemoryWindow::fetchDialogData(HWND hwnd)
 
 	// parse start address
 	GetWindowTextA(GetDlgItem(hwnd,IDC_DUMP_STARTADDRESS),str,256);
-	if (cpu->initExpression(str,exp) == false
-		|| cpu->parseExpression(exp,start) == false)
+	if (initExpression(cpu, str,exp) == false
+		|| parseExpression(cpu, exp,start) == false)
 	{
 		snprintf(errorMessage, sizeof(errorMessage), "Invalid address expression \"%s\".",str);
 		MessageBoxA(hwnd,errorMessage,"Error",MB_OK);
@@ -159,8 +160,8 @@ bool DumpMemoryWindow::fetchDialogData(HWND hwnd)
 	
 	// parse size
 	GetWindowTextA(GetDlgItem(hwnd,IDC_DUMP_SIZE),str,256);
-	if (cpu->initExpression(str,exp) == false
-		|| cpu->parseExpression(exp,size) == false)
+	if (initExpression(cpu, str,exp) == false
+		|| parseExpression(cpu, exp,size) == false)
 	{
 		snprintf(errorMessage, sizeof(errorMessage), "Invalid size expression \"%s\".",str);
 		MessageBoxA(hwnd,errorMessage,"Error",MB_OK);

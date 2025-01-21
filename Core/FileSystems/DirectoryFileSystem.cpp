@@ -17,13 +17,6 @@
 
 #include "ppsspp_config.h"
 
-#ifdef __MINGW32__
-#include <unistd.h>
-#ifndef _POSIX_THREAD_SAFE_FUNCTIONS
-#define _POSIX_THREAD_SAFE_FUNCTIONS 200112L
-#endif
-#endif
-
 #include <algorithm>
 #include <ctime>
 #include <limits>
@@ -39,7 +32,6 @@
 #include "Common/File/VFS/VFS.h"
 #include "Common/SysError.h"
 #include "Core/FileSystems/DirectoryFileSystem.h"
-#include "Core/FileSystems/ISOFileSystem.h"
 #include "Core/HLE/sceKernel.h"
 #include "Core/HW/MemoryStick.h"
 #include "Core/CoreTiming.h"
@@ -72,6 +64,22 @@
 
 DirectoryFileSystem::DirectoryFileSystem(IHandleAllocator *_hAlloc, const Path & _basePath, FileSystemFlags _flags) : basePath(_basePath), flags(_flags) {
 	File::CreateFullPath(basePath);
+
+	static const std::string_view mixedCase = "wJpCzSBNnZfxSgoS";
+	static const std::string_view upperCase = "WJPCZSBNNZFXSGOS";
+
+	// Check for case sensitivity
+	File::CreateEmptyFile(basePath / mixedCase);
+	if (File::Exists(basePath / mixedCase)) {
+		INFO_LOG(Log::IO, "File system probably writable, so case sensitivity check should be reliable.");
+		if (!File::Exists(basePath / upperCase)) {
+			flags |= FileSystemFlags::CASE_SENSITIVE;
+		}
+	}
+	File::Delete(basePath / mixedCase);
+
+	INFO_LOG(Log::IO, "Is file system case sensitive? %s (base: %s)", (flags & FileSystemFlags::CASE_SENSITIVE) ? "yes" : "no", _basePath.c_str());
+
 	hAlloc = _hAlloc;
 }
 
@@ -81,20 +89,22 @@ DirectoryFileSystem::~DirectoryFileSystem() {
 
 // TODO(scoped): Merge the two below functions somehow.
 
-Path DirectoryFileHandle::GetLocalPath(const Path &basePath, std::string localpath) const {
-	if (localpath.empty())
+Path DirectoryFileHandle::GetLocalPath(const Path &basePath, std::string localPath) const {
+	if (localPath.empty())
 		return basePath;
 
-	if (localpath[0] == '/')
-		localpath.erase(0, 1);
+	if (localPath[0] == '/')
+		localPath.erase(0, 1);
 
 	if (fileSystemFlags_ & FileSystemFlags::STRIP_PSP) {
-		if (startsWithNoCase(localpath, "PSP/")) {
-			localpath = localpath.substr(4);
+		if (localPath == "PSP") {
+			localPath = "/";
+		} else if (startsWithNoCase(localPath, "PSP/")) {
+			localPath = localPath.substr(4);
 		}
 	}
 
-	return basePath / localpath;
+	return basePath / localPath;
 }
 
 Path DirectoryFileSystem::GetLocalPath(std::string internalPath) const {
@@ -105,7 +115,9 @@ Path DirectoryFileSystem::GetLocalPath(std::string internalPath) const {
 		internalPath.erase(0, 1);
 
 	if (flags & FileSystemFlags::STRIP_PSP) {
-		if (startsWithNoCase(internalPath, "PSP/")) {
+		if (internalPath == "PSP") {
+			internalPath = "/";
+		} else if (startsWithNoCase(internalPath, "PSP/")) {
 			internalPath = internalPath.substr(4);
 		}
 	}
@@ -121,16 +133,16 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 		return false;
 	}
 
-#if HOST_IS_CASE_SENSITIVE
-	if (access & (FILEACCESS_APPEND | FILEACCESS_CREATE | FILEACCESS_WRITE)) {
-		DEBUG_LOG(FILESYS, "Checking case for path %s", fileName.c_str());
-		if (!FixPathCase(basePath, fileName, FPC_PATH_MUST_EXIST)) {
-			error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
-			return false;  // or go on and attempt (for a better error code than just 0?)
+	if (fileSystemFlags_ & FileSystemFlags::CASE_SENSITIVE) {
+		if (access & (FILEACCESS_APPEND | FILEACCESS_CREATE | FILEACCESS_WRITE)) {
+			DEBUG_LOG(Log::FileSystem, "Checking case for path %s", fileName.c_str());
+			if (!FixPathCase(basePath, fileName, FPC_PATH_MUST_EXIST)) {
+				error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
+				return false;  // or go on and attempt (for a better error code than just 0?)
+			}
 		}
 	}
 	// else we try fopen first (in case we're lucky) before simulating case insensitivity
-#endif
 
 	Path fullName = GetLocalPath(basePath, fileName);
 
@@ -192,7 +204,7 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 		if (w32err == ERROR_DISK_FULL || w32err == ERROR_NOT_ENOUGH_QUOTA) {
 			// This is returned when the disk is full.
 			auto err = GetI18NCategory(I18NCat::ERRORS);
-			g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("Disk full while writing data"));
+			g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("Disk full while writing data"), 0.0f, "diskfull");
 			error = SCE_KERNEL_ERROR_ERRNO_NO_PERM;
 		} else if (!success) {
 			error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
@@ -225,7 +237,7 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 			// Success
 			return true;
 		} else {
-			ERROR_LOG(FILESYS, "File::OpenFD returned an error");
+			ERROR_LOG(Log::FileSystem, "File::OpenFD returned an error");
 			// TODO: Need better error codes from OpenFD so we can distinguish
 			// disk full. Just set not found for now.
 			error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
@@ -255,29 +267,30 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 	bool success = hFile != -1;
 #endif
 
-#if HOST_IS_CASE_SENSITIVE
-	if (!success && !(access & FILEACCESS_CREATE)) {
-		if (!FixPathCase(basePath, fileName, FPC_PATH_MUST_EXIST)) {
-			error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
-			return false;
-		}
-		fullName = GetLocalPath(basePath, fileName);
-		const char *fullNameC = fullName.c_str();
+	if (fileSystemFlags_ & FileSystemFlags::CASE_SENSITIVE) {
+		if (!success && !(access & FILEACCESS_CREATE)) {
+			if (!FixPathCase(basePath, fileName, FPC_PATH_MUST_EXIST)) {
+				error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
+				return false;
+			}
+			fullName = GetLocalPath(basePath, fileName);
+			DEBUG_LOG(Log::FileSystem, "Case may have been incorrect, second try opening %s (%s)", fullName.c_str(), fileName.c_str());
 
-		DEBUG_LOG(FILESYS, "Case may have been incorrect, second try opening %s (%s)", fullNameC, fileName.c_str());
-
-		// And try again with the correct case this time
-#ifdef _WIN32
-		hFile = CreateFile(fullNameC, desired, sharemode, 0, openmode, 0, 0);
-		success = hFile != INVALID_HANDLE_VALUE;
+			// And try again with the correct case this time
+#if PPSSPP_PLATFORM(UWP)
+			// Should never get here.
+#elif PPSSPP_PLATFORM(WINDOWS)
+			// Unlikely to get here, heh.
+			hFile = CreateFile(fullName.ToWString().c_str(), desired, sharemode, 0, openmode, 0, 0);
+			success = hFile != INVALID_HANDLE_VALUE;
 #else
-		hFile = open(fullNameC, flags, 0666);
-		success = hFile != -1;
+			hFile = open(fullName.c_str(), flags, 0666);
+			success = hFile != -1;
 #endif
+		}
 	}
-#endif
 
-#ifndef _WIN32
+#if !PPSSPP_PLATFORM(WINDOWS)
 	if (success) {
 		// Reject directories, even if we succeed in opening them.
 		// TODO: Might want to do this stat first...
@@ -290,7 +303,7 @@ bool DirectoryFileHandle::Open(const Path &basePath, std::string &fileName, File
 	} else if (errno == ENOSPC) {
 		// This is returned when the disk is full.
 		auto err = GetI18NCategory(I18NCat::ERRORS);
-		g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("Disk full while writing data"));
+		g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("Disk full while writing data"), 0.0f, "diskfull");
 		error = SCE_KERNEL_ERROR_ERRNO_NO_PERM;
 	} else {
 		error = SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
@@ -363,17 +376,20 @@ size_t DirectoryFileHandle::Write(const u8* pointer, s64 size)
 	MemoryStick_NotifyWrite();
 
 	if (diskFull) {
-		ERROR_LOG(FILESYS, "Disk full");
+		ERROR_LOG(Log::FileSystem, "Disk full");
 		auto err = GetI18NCategory(I18NCat::ERRORS);
-		g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("Disk full while writing data"));
+		g_OSD.Show(OSDType::MESSAGE_ERROR, err->T("Disk full while writing data"), 0.0f, "diskfull");
 		// We only return an error when the disk is actually full.
 		// When writing this would cause the disk to be full, so it wasn't written, we return 0.
-		if (MemoryStick_FreeSpace() == 0) {
-			// Sign extend on 64-bit.
-			return (size_t)(s64)(s32)SCE_KERNEL_ERROR_ERRNO_DEVICE_NO_FREE_SPACE;
+		Path saveFolder = GetSysDirectory(DIRECTORY_SAVEDATA);
+		int64_t space;
+		if (free_disk_space(saveFolder, space)) {
+			if (space < size) {
+				// Sign extend to a 64-bit value.
+				return (size_t)(s64)(s32)SCE_KERNEL_ERROR_ERRNO_DEVICE_NO_FREE_SPACE;
+			}
 		}
 	}
-
 	return bytesWritten;
 }
 
@@ -384,7 +400,7 @@ size_t DirectoryFileHandle::Seek(s32 position, FileMove type)
 		// The actual, underlying file hasn't been truncated (yet.)
 		if (type == FILEMOVE_END) {
 			type = FILEMOVE_BEGIN;
-			position = needsTrunc_ + position;
+			position = (s32)(needsTrunc_ + position);
 		}
 	}
 
@@ -421,12 +437,12 @@ void DirectoryFileHandle::Close()
 #ifdef _WIN32
 		Seek((s32)needsTrunc_, FILEMOVE_BEGIN);
 		if (SetEndOfFile(hFile) == 0) {
-			ERROR_LOG_REPORT(FILESYS, "Failed to truncate file.");
+			ERROR_LOG_REPORT(Log::FileSystem, "Failed to truncate file.");
 		}
 #elif !PPSSPP_PLATFORM(SWITCH)
 		// Note: it's not great that Switch cannot truncate appropriately...
 		if (ftruncate(hFile, (off_t)needsTrunc_) != 0) {
-			ERROR_LOG_REPORT(FILESYS, "Failed to truncate file.");
+			ERROR_LOG_REPORT(Log::FileSystem, "Failed to truncate file.");
 		}
 #endif
 	}
@@ -441,7 +457,7 @@ void DirectoryFileHandle::Close()
 
 void DirectoryFileSystem::CloseAll() {
 	for (auto iter = entries.begin(); iter != entries.end(); ++iter) {
-		INFO_LOG(FILESYS, "DirectoryFileSystem::CloseAll(): Force closing %d (%s)", (int)iter->first, iter->second.guestFilename.c_str());
+		INFO_LOG(Log::FileSystem, "DirectoryFileSystem::CloseAll(): Force closing %d (%s)", (int)iter->first, iter->second.guestFilename.c_str());
 		iter->second.hFile.Close();
 	}
 	entries.clear();
@@ -449,18 +465,18 @@ void DirectoryFileSystem::CloseAll() {
 
 bool DirectoryFileSystem::MkDir(const std::string &dirname) {
 	bool result;
-#if HOST_IS_CASE_SENSITIVE
-	// Must fix case BEFORE attempting, because MkDir would create
-	// duplicate (different case) directories
-
-	std::string fixedCase = dirname;
-	if (!FixPathCase(basePath, fixedCase, FPC_PARTIAL_ALLOWED))
-		result = false;
-	else
-		result = File::CreateFullPath(GetLocalPath(fixedCase));
-#else
-	result = File::CreateFullPath(GetLocalPath(dirname));
-#endif
+	if (flags & FileSystemFlags::CASE_SENSITIVE) {
+		// Must fix case BEFORE attempting, because MkDir would create
+		// duplicate (different case) directories
+		std::string fixedCase = dirname;
+		if (!FixPathCase(basePath, fixedCase, FPC_PARTIAL_ALLOWED)) {
+			result = false;
+		} else {
+			result = File::CreateFullPath(GetLocalPath(fixedCase));
+		}
+	} else {
+		result = File::CreateFullPath(GetLocalPath(dirname));
+	}
 	MemoryStick_NotifyWrite();
 	return ReplayApplyDisk(ReplayAction::MKDIR, result, CoreTiming::GetGlobalTimeUs()) != 0;
 }
@@ -468,20 +484,20 @@ bool DirectoryFileSystem::MkDir(const std::string &dirname) {
 bool DirectoryFileSystem::RmDir(const std::string &dirname) {
 	Path fullName = GetLocalPath(dirname);
 
-#if HOST_IS_CASE_SENSITIVE
-	// Maybe we're lucky?
-	if (File::DeleteDirRecursively(fullName)) {
-		MemoryStick_NotifyWrite();
-		return (bool)ReplayApplyDisk(ReplayAction::RMDIR, true, CoreTiming::GetGlobalTimeUs());
+	if (flags & FileSystemFlags::CASE_SENSITIVE) {
+		// Maybe we're lucky?
+		if (File::DeleteDirRecursively(fullName)) {
+			MemoryStick_NotifyWrite();
+			return (bool)ReplayApplyDisk(ReplayAction::RMDIR, true, CoreTiming::GetGlobalTimeUs());
+		}
+
+		// Nope, fix case and try again.  Should we try again?
+		std::string fullPath = dirname;
+		if (!FixPathCase(basePath, fullPath, FPC_FILE_MUST_EXIST))
+			return (bool)ReplayApplyDisk(ReplayAction::RMDIR, false, CoreTiming::GetGlobalTimeUs());
+
+		fullName = GetLocalPath(fullPath);
 	}
-
-	// Nope, fix case and try again.  Should we try again?
-	std::string fullPath = dirname;
-	if (!FixPathCase(basePath, fullPath, FPC_FILE_MUST_EXIST))
-		return (bool)ReplayApplyDisk(ReplayAction::RMDIR, false, CoreTiming::GetGlobalTimeUs());
-
-	fullName = GetLocalPath(fullPath);
-#endif
 
 	bool result = File::DeleteDirRecursively(fullName);
 	MemoryStick_NotifyWrite();
@@ -507,28 +523,27 @@ int DirectoryFileSystem::RenameFile(const std::string &from, const std::string &
 
 	Path fullFrom = GetLocalPath(from);
 
-#if HOST_IS_CASE_SENSITIVE
-	// In case TO should overwrite a file with different case.  Check error code?
-	if (!FixPathCase(basePath, fullTo, FPC_PATH_MUST_EXIST))
-		return ReplayApplyDisk(ReplayAction::FILE_RENAME, -1, CoreTiming::GetGlobalTimeUs());
-#endif
+	if (flags & FileSystemFlags::CASE_SENSITIVE) {
+		// In case TO should overwrite a file with different case.  Check error code?
+		if (!FixPathCase(basePath, fullTo, FPC_PATH_MUST_EXIST))
+			return ReplayApplyDisk(ReplayAction::FILE_RENAME, -1, CoreTiming::GetGlobalTimeUs());
+	}
 
 	Path fullToPath = GetLocalPath(fullTo);
 
 	bool retValue = File::Rename(fullFrom, fullToPath);
 
-#if HOST_IS_CASE_SENSITIVE
-	if (!retValue)
-	{
-		// May have failed due to case sensitivity on FROM, so try again.  Check error code?
-		std::string fullFromPath = from;
-		if (!FixPathCase(basePath, fullFromPath, FPC_FILE_MUST_EXIST))
-			return ReplayApplyDisk(ReplayAction::FILE_RENAME, -1, CoreTiming::GetGlobalTimeUs());
-		fullFrom = GetLocalPath(fullFromPath);
+	if (flags & FileSystemFlags::CASE_SENSITIVE) {
+		if (!retValue) {
+			// May have failed due to case sensitivity on FROM, so try again.  Check error code?
+			std::string fullFromPath = from;
+			if (!FixPathCase(basePath, fullFromPath, FPC_FILE_MUST_EXIST))
+				return ReplayApplyDisk(ReplayAction::FILE_RENAME, -1, CoreTiming::GetGlobalTimeUs());
+			fullFrom = GetLocalPath(fullFromPath);
 
-		retValue = File::Rename(fullFrom, fullToPath);
+			retValue = File::Rename(fullFrom, fullToPath);
+		}
 	}
-#endif
 
 	// TODO: Better error codes.
 	int result = retValue ? 0 : (int)SCE_KERNEL_ERROR_ERRNO_FILE_ALREADY_EXISTS;
@@ -541,18 +556,17 @@ bool DirectoryFileSystem::RemoveFile(const std::string &filename) {
 
 	bool retValue = File::Delete(localPath);
 
-#if HOST_IS_CASE_SENSITIVE
-	if (!retValue)
-	{
-		// May have failed due to case sensitivity, so try again.  Try even if it fails?
-		std::string fullNamePath = filename;
-		if (!FixPathCase(basePath, fullNamePath, FPC_FILE_MUST_EXIST))
-			return (bool)ReplayApplyDisk(ReplayAction::FILE_REMOVE, false, CoreTiming::GetGlobalTimeUs());
-		localPath = GetLocalPath(fullNamePath);
+	if (flags & FileSystemFlags::CASE_SENSITIVE) {
+		if (!retValue) {
+			// May have failed due to case sensitivity, so try again.  Try even if it fails?
+			std::string fullNamePath = filename;
+			if (!FixPathCase(basePath, fullNamePath, FPC_FILE_MUST_EXIST))
+				return (bool)ReplayApplyDisk(ReplayAction::FILE_REMOVE, false, CoreTiming::GetGlobalTimeUs());
+			localPath = GetLocalPath(fullNamePath);
 
-		retValue = File::Delete(localPath);
+			retValue = File::Delete(localPath);
+		}
 	}
-#endif
 
 	MemoryStick_NotifyWrite();
 	return ReplayApplyDisk(ReplayAction::FILE_REMOVE, retValue, CoreTiming::GetGlobalTimeUs()) != 0;
@@ -579,7 +593,7 @@ int DirectoryFileSystem::OpenFile(std::string filename, FileAccess access, const
 		logError = (int)errno;
 #endif
 		if (!(access & FILEACCESS_PPSSPP_QUIET)) {
-			ERROR_LOG(FILESYS, "DirectoryFileSystem::OpenFile('%s'): FAILED, %d - access = %d '%s'", filename.c_str(), logError, (int)(access & FILEACCESS_PSP_FLAGS), errorString.c_str());
+			ERROR_LOG(Log::FileSystem, "DirectoryFileSystem::OpenFile('%s'): FAILED, %d - access = %d '%s'", filename.c_str(), logError, (int)(access & FILEACCESS_PSP_FLAGS), errorString.c_str());
 		}
 		return err;
 	} else {
@@ -608,7 +622,7 @@ void DirectoryFileSystem::CloseFile(u32 handle) {
 		entries.erase(iter);
 	} else {
 		//This shouldn't happen...
-		ERROR_LOG(FILESYS,"Cannot close file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot close file that hasn't been opened: %08x", handle);
 	}
 }
 
@@ -634,7 +648,7 @@ size_t DirectoryFileSystem::ReadFile(u32 handle, u8 *pointer, s64 size, int &use
 	EntryMap::iterator iter = entries.find(handle);
 	if (iter != entries.end()) {
 		if (size < 0) {
-			ERROR_LOG_REPORT(FILESYS, "Invalid read for %lld bytes from disk %s", size, iter->second.guestFilename.c_str());
+			ERROR_LOG_REPORT(Log::FileSystem, "Invalid read for %lld bytes from disk %s", size, iter->second.guestFilename.c_str());
 			return 0;
 		}
 
@@ -642,7 +656,7 @@ size_t DirectoryFileSystem::ReadFile(u32 handle, u8 *pointer, s64 size, int &use
 		return bytesRead;
 	} else {
 		// This shouldn't happen...
-		ERROR_LOG(FILESYS,"Cannot read file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot read file that hasn't been opened: %08x", handle);
 		return 0;
 	}
 }
@@ -659,7 +673,7 @@ size_t DirectoryFileSystem::WriteFile(u32 handle, const u8 *pointer, s64 size, i
 		return bytesWritten;
 	} else {
 		//This shouldn't happen...
-		ERROR_LOG(FILESYS,"Cannot write to file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot write to file that hasn't been opened: %08x", handle);
 		return 0;
 	}
 }
@@ -670,7 +684,7 @@ size_t DirectoryFileSystem::SeekFile(u32 handle, s32 position, FileMove type) {
 		return iter->second.hFile.Seek(position,type);
 	} else {
 		//This shouldn't happen...
-		ERROR_LOG(FILESYS,"Cannot seek in file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot seek in file that hasn't been opened: %08x", handle);
 		return 0;
 	}
 }
@@ -682,16 +696,16 @@ PSPFileInfo DirectoryFileSystem::GetFileInfo(std::string filename) {
 	File::FileInfo info;
 	Path fullName = GetLocalPath(filename);
 	if (!File::GetFileInfo(fullName, &info)) {
-#if HOST_IS_CASE_SENSITIVE
-		if (! FixPathCase(basePath, filename, FPC_FILE_MUST_EXIST))
-			return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
-		fullName = GetLocalPath(filename);
+		if (flags & FileSystemFlags::CASE_SENSITIVE) {
+			if (!FixPathCase(basePath, filename, FPC_FILE_MUST_EXIST))
+				return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
+			fullName = GetLocalPath(filename);
 
-		if (!File::GetFileInfo(fullName, &info))
+			if (!File::GetFileInfo(fullName, &info))
+				return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
+		} else {
 			return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
-#else
-		return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
-#endif
+		}
 	}
 
 	x.type = info.isDirectory ? FILETYPE_DIRECTORY : FILETYPE_NORMAL;
@@ -699,15 +713,15 @@ PSPFileInfo DirectoryFileSystem::GetFileInfo(std::string filename) {
 
 	if (x.type != FILETYPE_DIRECTORY) {
 		x.size = info.size;
-		x.access = info.access;
-		time_t atime = info.atime;
-		time_t ctime = info.ctime;
-		time_t mtime = info.mtime;
-
-		localtime_r((time_t*)&atime, &x.atime);
-		localtime_r((time_t*)&ctime, &x.ctime);
-		localtime_r((time_t*)&mtime, &x.mtime);
 	}
+	x.access = info.access;
+	time_t atime = info.atime;
+	time_t ctime = info.ctime;
+	time_t mtime = info.mtime;
+
+	localtime_r((time_t*)&atime, &x.atime);
+	localtime_r((time_t*)&ctime, &x.ctime);
+	localtime_r((time_t*)&mtime, &x.mtime);
 
 	return ReplayApplyDiskFileInfo(x, CoreTiming::GetGlobalTimeUs());
 }
@@ -720,7 +734,7 @@ static void tmFromFiletime(tm &dest, const FILETIME &src) {
 	u64 from_1970_us = from_1601_us - FILETIME_FROM_UNIX_EPOCH_US;
 
 	time_t t = (time_t) (from_1970_us / 1000000UL);
-	localtime_r(&t, &dest);
+	localtime_s(&dest, &t);
 }
 #endif
 
@@ -737,9 +751,9 @@ static void tmFromFiletime(tm &dest, const FILETIME &src) {
 // Hopefully no PSP games read directories after they create files in them...
 static std::string SimulateVFATBug(std::string filename) {
 	// These are the characters allowed in DOS filenames.
-	static const char *FAT_UPPER_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&'(){}-_`~";
-	static const char *FAT_LOWER_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&'(){}-_`~";
-	static const char *LOWER_CHARS = "abcdefghijklmnopqrstuvwxyz";
+	static const char * const FAT_UPPER_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&'(){}-_`~";
+	static const char * const FAT_LOWER_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&'(){}-_`~";
+	static const char * const LOWER_CHARS = "abcdefghijklmnopqrstuvwxyz";
 
 	// To avoid logging/comparing, skip all this if it has no lowercase chars to begin with.
 	size_t lowerchar = filename.find_first_of(LOWER_CHARS);
@@ -776,7 +790,7 @@ static std::string SimulateVFATBug(std::string filename) {
 	}
 
 	if (apply_hack) {
-		VERBOSE_LOG(FILESYS, "Applying VFAT hack to filename: %s", filename.c_str());
+		VERBOSE_LOG(Log::FileSystem, "Applying VFAT hack to filename: %s", filename.c_str());
 		// In this situation, NT would write UPPERCASE, and just set a flag to say "actually lowercase".
 		// That VFAT flag isn't read by the PSP firmware, so let's pretend to "not read it."
 		std::transform(filename.begin(), filename.end(), filename.begin(), toupper);
@@ -804,17 +818,19 @@ std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(const std::string &p
 	Path localPath = GetLocalPath(path);
 	const int flags = File::GETFILES_GETHIDDEN | File::GETFILES_GET_NAVIGATION_ENTRIES;
 	bool success = File::GetFilesInDir(localPath, &files, nullptr, flags);
-#if HOST_IS_CASE_SENSITIVE
-	if (!success) {
-		// TODO: Case sensitivity should be checked on a file system basis, right?
-		std::string fixedPath = path;
-		if (FixPathCase(basePath, fixedPath, FPC_FILE_MUST_EXIST)) {
-			// May have failed due to case sensitivity, try again
-			localPath = GetLocalPath(fixedPath);
-			success = File::GetFilesInDir(localPath, &files, nullptr, flags);
+
+	if (this->flags & FileSystemFlags::CASE_SENSITIVE) {
+		if (!success) {
+			// TODO: Case sensitivity should be checked on a file system basis, right?
+			std::string fixedPath = path;
+			if (FixPathCase(basePath, fixedPath, FPC_FILE_MUST_EXIST)) {
+				// May have failed due to case sensitivity, try again
+				localPath = GetLocalPath(fixedPath);
+				success = File::GetFilesInDir(localPath, &files, nullptr, flags);
+			}
 		}
 	}
-#endif
+
 	if (!success) {
 		if (exists)
 			*exists = false;
@@ -832,7 +848,7 @@ std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(const std::string &p
 			entry.name = file.name;
 		}
 		if (hideISOFiles) {
-			if (endsWithNoCase(entry.name, ".cso") || endsWithNoCase(entry.name, ".iso")) {
+			if (endsWithNoCase(entry.name, ".cso") || endsWithNoCase(entry.name, ".iso") || endsWithNoCase(entry.name, ".chd")) {  // chd not really necessary, but let's hide them too.
 				// Workaround for DJ Max Portable, see compat.ini.
 				continue;
 			} else if (file.isDirectory) {
@@ -868,26 +884,39 @@ std::vector<PSPFileInfo> DirectoryFileSystem::GetDirListing(const std::string &p
 		myVector.push_back(entry);
 	}
 
+	if (this->flags & FileSystemFlags::STRIP_PSP) {
+		if (path == "/") {
+			// Artificially add the /PSP directory to the root listing.
+			PSPFileInfo pspInfo{};
+			pspInfo.name = "PSP";
+			pspInfo.type = FILETYPE_DIRECTORY;
+			pspInfo.size = 4096;
+			pspInfo.access = 0x777;
+			pspInfo.exists = true;
+			myVector.push_back(pspInfo);
+		}
+	}
+
 	if (exists)
 		*exists = true;
 	return ReplayApplyDiskListing(myVector, CoreTiming::GetGlobalTimeUs());
 }
 
-u64 DirectoryFileSystem::FreeSpace(const std::string &path) {
+u64 DirectoryFileSystem::FreeDiskSpace(const std::string &path) {
 	int64_t result = 0;
 	if (free_disk_space(GetLocalPath(path), result)) {
 		return ReplayApplyDisk64(ReplayAction::FREESPACE, (uint64_t)result, CoreTiming::GetGlobalTimeUs());
 	}
 
-#if HOST_IS_CASE_SENSITIVE
-	std::string fixedCase = path;
-	if (FixPathCase(basePath, fixedCase, FPC_FILE_MUST_EXIST)) {
-		// May have failed due to case sensitivity, try again.
-		if (free_disk_space(GetLocalPath(fixedCase), result)) {
-			return ReplayApplyDisk64(ReplayAction::FREESPACE, result, CoreTiming::GetGlobalTimeUs());
+	if (flags & FileSystemFlags::CASE_SENSITIVE) {
+		std::string fixedCase = path;
+		if (FixPathCase(basePath, fixedCase, FPC_FILE_MUST_EXIST)) {
+			// May have failed due to case sensitivity, try again.
+			if (free_disk_space(GetLocalPath(fixedCase), result)) {
+				return ReplayApplyDisk64(ReplayAction::FREESPACE, result, CoreTiming::GetGlobalTimeUs());
+			}
 		}
 	}
-#endif
 
 	// Just assume they're swimming in free disk space if we don't know otherwise.
 	return ReplayApplyDisk64(ReplayAction::FREESPACE, std::numeric_limits<u64>::max(), CoreTiming::GetGlobalTimeUs());
@@ -922,13 +951,13 @@ void DirectoryFileSystem::DoState(PointerWrap &p) {
 			u32 err;
 			bool brokenFile = false;
 			if (!entry.hFile.Open(basePath,entry.guestFilename,entry.access, err)) {
-				ERROR_LOG(FILESYS, "Failed to reopen file while loading state: %s", entry.guestFilename.c_str());
+				ERROR_LOG(Log::FileSystem, "Failed to reopen file while loading state: %s", entry.guestFilename.c_str());
 				brokenFile = true;
 			}
 			u32 position;
 			Do(p, position);
 			if (position != entry.hFile.Seek(position, FILEMOVE_BEGIN)) {
-				ERROR_LOG(FILESYS, "Failed to restore seek position while loading state: %s", entry.guestFilename.c_str());
+				ERROR_LOG(Log::FileSystem, "Failed to restore seek position while loading state: %s", entry.guestFilename.c_str());
 				brokenFile = true;
 			}
 			if (s >= 2) {
@@ -966,7 +995,7 @@ VFSFileSystem::~VFSFileSystem() {
 	entries.clear();
 }
 
-std::string VFSFileSystem::GetLocalPath(const std::string &localPath) {
+std::string VFSFileSystem::GetLocalPath(const std::string &localPath) const {
 	return basePath + localPath;
 }
 
@@ -992,18 +1021,18 @@ bool VFSFileSystem::RemoveFile(const std::string &filename) {
 
 int VFSFileSystem::OpenFile(std::string filename, FileAccess access, const char *devicename) {
 	if (access != FILEACCESS_READ) {
-		ERROR_LOG(FILESYS, "VFSFileSystem only supports plain reading");
+		ERROR_LOG(Log::FileSystem, "VFSFileSystem only supports plain reading");
 		return SCE_KERNEL_ERROR_ERRNO_INVALID_FLAG;
 	}
 
 	std::string fullName = GetLocalPath(filename);
 	const char *fullNameC = fullName.c_str();
-	VERBOSE_LOG(FILESYS, "VFSFileSystem actually opening %s (%s)", fullNameC, filename.c_str());
+	VERBOSE_LOG(Log::FileSystem, "VFSFileSystem actually opening %s (%s)", fullNameC, filename.c_str());
 
 	size_t size;
 	u8 *data = g_VFS.ReadFile(fullNameC, &size);
 	if (!data) {
-		ERROR_LOG(FILESYS, "VFSFileSystem failed to open %s", filename.c_str());
+		ERROR_LOG(Log::FileSystem, "VFSFileSystem failed to open %s", filename.c_str());
 		return SCE_KERNEL_ERROR_ERRNO_FILE_NOT_FOUND;
 	}
 
@@ -1042,7 +1071,7 @@ void VFSFileSystem::CloseFile(u32 handle) {
 		entries.erase(iter);
 	} else {
 		//This shouldn't happen...
-		ERROR_LOG(FILESYS,"Cannot close file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot close file that hasn't been opened: %08x", handle);
 	}
 }
 
@@ -1065,16 +1094,19 @@ size_t VFSFileSystem::ReadFile(u32 handle, u8 *pointer, s64 size) {
 }
 
 size_t VFSFileSystem::ReadFile(u32 handle, u8 *pointer, s64 size, int &usec) {
-	DEBUG_LOG(FILESYS,"VFSFileSystem::ReadFile %08x %p %i", handle, pointer, (u32)size);
+	DEBUG_LOG(Log::FileSystem,"VFSFileSystem::ReadFile %08x %p %i", handle, pointer, (u32)size);
 	EntryMap::iterator iter = entries.find(handle);
 	if (iter != entries.end())
 	{
+		if(iter->second.seekPos + size > iter->second.size)
+			size = iter->second.size - iter->second.seekPos;
+		if(size < 0) size = 0;
 		size_t bytesRead = size;
 		memcpy(pointer, iter->second.fileData + iter->second.seekPos, size);
 		iter->second.seekPos += size;
 		return bytesRead;
 	} else {
-		ERROR_LOG(FILESYS,"Cannot read file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot read file that hasn't been opened: %08x", handle);
 		return 0;
 	}
 }
@@ -1100,7 +1132,7 @@ size_t VFSFileSystem::SeekFile(u32 handle, s32 position, FileMove type) {
 		return iter->second.seekPos;
 	} else {
 		//This shouldn't happen...
-		ERROR_LOG(FILESYS,"Cannot seek in file that hasn't been opened: %08x", handle);
+		ERROR_LOG(Log::FileSystem,"Cannot seek in file that hasn't been opened: %08x", handle);
 		return 0;
 	}
 }
@@ -1124,6 +1156,6 @@ void VFSFileSystem::DoState(PointerWrap &p) {
 
 	if (num != 0) {
 		p.SetError(p.ERROR_WARNING);
-		ERROR_LOG(FILESYS, "FIXME: Open files during savestate, could go badly.");
+		ERROR_LOG(Log::FileSystem, "FIXME: Open files during savestate, could go badly.");
 	}
 }

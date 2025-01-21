@@ -27,6 +27,8 @@
 #include "UI/MiscScreens.h"
 #include "UI/TabbedDialogScreen.h"
 
+class Path;
+
 // Per-game settings screen - enables you to configure graphic options, control options, etc
 // per game.
 class GameSettingsScreen : public TabbedUIDialogScreenWithGameBackground {
@@ -42,6 +44,7 @@ protected:
 	void dialogFinished(const Screen *dialog, DialogResult result) override;
 
 	void CreateTabs() override;
+	bool ShowSearchControls() const override { return true; }
 
 private:
 	void PreCreateViews() override;
@@ -86,7 +89,6 @@ private:
 	UI::EventReturn OnChangeQuickChat2(UI::EventParams &e);
 	UI::EventReturn OnChangeQuickChat3(UI::EventParams &e);
 	UI::EventReturn OnChangeQuickChat4(UI::EventParams &e);
-	UI::EventReturn OnChangeNickname(UI::EventParams &e);
 	UI::EventReturn OnChangeproAdhocServerAddress(UI::EventParams &e);
 	UI::EventReturn OnChangeBackground(UI::EventParams &e);
 	UI::EventReturn OnFullscreenChange(UI::EventParams &e);
@@ -100,10 +102,10 @@ private:
 	UI::EventReturn OnMicDeviceChange(UI::EventParams& e);
 	UI::EventReturn OnAudioDevice(UI::EventParams &e);
 	UI::EventReturn OnJitAffectingSetting(UI::EventParams &e);
-	UI::EventReturn OnChangeMemStickDir(UI::EventParams &e);
+	UI::EventReturn OnShowMemstickScreen(UI::EventParams &e);
 #if defined(_WIN32) && !PPSSPP_PLATFORM(UWP)
-	UI::EventReturn OnSavePathMydoc(UI::EventParams &e);
-	UI::EventReturn OnSavePathOther(UI::EventParams &e);
+	UI::EventReturn OnMemoryStickMyDoc(UI::EventParams &e);
+	UI::EventReturn OnMemoryStickOther(UI::EventParams &e);
 #endif
 	UI::EventReturn OnScreenRotation(UI::EventParams &e);
 	UI::EventReturn OnImmersiveModeChange(UI::EventParams &e);
@@ -147,12 +149,16 @@ private:
 	UI::EventReturn OnJitAffectingSetting(UI::EventParams &e);
 	UI::EventReturn OnJitDebugTools(UI::EventParams &e);
 	UI::EventReturn OnRemoteDebugger(UI::EventParams &e);
+	UI::EventReturn OnMIPSTracerEnabled(UI::EventParams &e);
+	UI::EventReturn OnMIPSTracerPathChanged(UI::EventParams &e);
+	UI::EventReturn OnMIPSTracerFlushTrace(UI::EventParams &e);
+	UI::EventReturn OnMIPSTracerClearJitCache(UI::EventParams &e);
+	UI::EventReturn OnMIPSTracerClearTracer(UI::EventParams &e);
 	UI::EventReturn OnGPUDriverTest(UI::EventParams &e);
 	UI::EventReturn OnFramedumpTest(UI::EventParams &e);
+	UI::EventReturn OnMemstickTest(UI::EventParams &e);
 	UI::EventReturn OnTouchscreenTest(UI::EventParams &e);
 	UI::EventReturn OnCopyStatesToRoot(UI::EventParams &e);
-	UI::EventReturn OnCustomDriverChange(UI::EventParams &e);
-	UI::EventReturn OnCustomDriverInstall(UI::EventParams &e);
 
 	bool allowDebugger_ = false;
 	bool canAllowDebugger_ = true;
@@ -162,19 +168,26 @@ private:
 		MAYBE,
 	};
 	HasIni hasTexturesIni_ = HasIni::MAYBE;
+
+	bool MIPSTracerEnabled_ = false;
+	std::string MIPSTracerPath_ = "";
+	UI::InfoItem* MIPSTracerPath = nullptr;
 };
 
 class HostnameSelectScreen : public PopupScreen {
 public:
-	HostnameSelectScreen(std::string *value, const std::string &title)
+	HostnameSelectScreen(std::string *value, std::string_view title)
 		: PopupScreen(title, "OK", "Cancel"), value_(value) {
 		resolver_ = std::thread([](HostnameSelectScreen *thiz) {
 			thiz->ResolverThread();
 		}, this);
 	}
 	~HostnameSelectScreen() {
-		resolverState_ = ResolverState::QUIT;
-		resolverCond_.notify_one();
+		{
+			std::unique_lock<std::mutex> guard(resolverLock_);
+			resolverState_ = ResolverState::QUIT;
+			resolverCond_.notify_one();
+		}
 		resolver_.join();
 	}
 
@@ -232,7 +245,7 @@ public:
 
 class RestoreSettingsScreen : public PopupScreen {
 public:
-	RestoreSettingsScreen(const char *title);
+	RestoreSettingsScreen(std::string_view title);
 	void CreatePopupContents(UI::ViewGroup *parent) override;
 
 	const char *tag() const override { return "RestoreSettingsScreen"; }
@@ -240,3 +253,5 @@ private:
 	void OnCompleted(DialogResult result) override;
 	int restoreFlags_ = (int)(RestoreSettingsBits::SETTINGS);  // RestoreSettingsBits enum
 };
+
+void TriggerRestart(const char *why, bool editThenRestore, const Path &gamePath);

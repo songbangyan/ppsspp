@@ -29,6 +29,7 @@
 #include <shellapi.h>
 #include <commctrl.h>
 #include <string>
+#include <dwmapi.h>
 
 #include "Common/System/Display.h"
 #include "Common/System/NativeApp.h"
@@ -40,6 +41,7 @@
 #include "Common/Input/KeyCodes.h"
 #include "Common/Thread/ThreadUtil.h"
 #include "Common/Data/Encoding/Utf8.h"
+#include "ext/imgui/imgui_impl_platform.h"
 
 #include "Core/Core.h"
 #include "Core/Config.h"
@@ -71,8 +73,8 @@
 #include "Windows/resource.h"
 
 #include "Windows/MainWindow.h"
-#include "Common/LogManager.h"
-#include "Common/ConsoleListener.h"
+#include "Common/Log/LogManager.h"
+#include "Common/Log/ConsoleListener.h"
 #include "Windows/W32Util/DialogManager.h"
 #include "Windows/W32Util/ShellUtil.h"
 #include "Windows/W32Util/Misc.h"
@@ -80,7 +82,7 @@
 #include "Windows/CaptureDevice.h"
 #include "Windows/TouchInputHandler.h"
 #include "Windows/MainWindowMenu.h"
-#include "GPU/GPUInterface.h"
+#include "GPU/GPUCommon.h"
 #include "UI/OnScreenDisplay.h"
 #include "UI/GameSettingsScreen.h"
 
@@ -136,6 +138,7 @@ namespace MainWindow
 	static bool inResizeMove = false;
 	static bool hasFocus = true;
 	static bool g_isFullscreen = false;
+	static bool g_keepScreenBright = false;
 
 	static bool disasmMapLoadPending = false;
 	static bool memoryMapLoadPending = false;
@@ -158,6 +161,10 @@ namespace MainWindow
 
 	HWND GetDisplayHWND() {
 		return hwndDisplay;
+	}
+
+	void SetKeepScreenBright(bool keepBright) {
+		g_keepScreenBright = keepBright;
 	}
 
 	void Init(HINSTANCE hInstance) {
@@ -267,7 +274,7 @@ namespace MainWindow
 
 	static void HandleSizeChange(int newSizingType) {
 		SavePosition();
-		Core_NotifyWindowHidden(false);
+		Native_NotifyWindowHidden(false);
 		if (!g_Config.bPauseWhenMinimized) {
 			System_PostUIMessage(UIMessage::WINDOW_MINIMIZED, "false");
 		}
@@ -286,9 +293,9 @@ namespace MainWindow
 			PSP_CoreParameter().pixelHeight = height;
 		}
 
-		DEBUG_LOG(SYSTEM, "Pixel width/height: %dx%d", PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
+		DEBUG_LOG(Log::System, "Pixel width/height: %dx%d", PSP_CoreParameter().pixelWidth, PSP_CoreParameter().pixelHeight);
 
-		if (UpdateScreenScale(width, height)) {
+		if (Native_UpdateScreenScale(width, height)) {
 			System_PostUIMessage(UIMessage::GPU_DISPLAY_RESIZED);
 			System_PostUIMessage(UIMessage::GPU_RENDER_RESIZED);
 		}
@@ -483,6 +490,10 @@ namespace MainWindow
 
 		SetWindowLong(hwndMain, GWL_EXSTYLE, WS_EX_APPWINDOW);
 
+
+		const DWM_WINDOW_CORNER_PREFERENCE pref = DWMWCP_DONOTROUND;
+		DwmSetWindowAttribute(hwndMain, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+
 		RECT rcClient;
 		GetClientRect(hwndMain, &rcClient);
 
@@ -573,25 +584,21 @@ namespace MainWindow
 
 	void DestroyDebugWindows() {
 		DialogManager::RemoveDlg(disasmWindow);
-		if (disasmWindow)
-			delete disasmWindow;
+		delete disasmWindow;
 		disasmWindow = nullptr;
 
 #if PPSSPP_API(ANY_GL)
 		DialogManager::RemoveDlg(geDebuggerWindow);
-		if (geDebuggerWindow)
-			delete geDebuggerWindow;
+		delete geDebuggerWindow;
 		geDebuggerWindow = nullptr;
 #endif
 
 		DialogManager::RemoveDlg(memoryWindow);
-		if (memoryWindow)
-			delete memoryWindow;
+		delete memoryWindow;
 		memoryWindow = nullptr;
 
 		DialogManager::RemoveDlg(vfpudlg);
-		if (vfpudlg)
-			delete vfpudlg;
+		delete vfpudlg;
 		vfpudlg = nullptr;
 	}
 
@@ -599,16 +606,37 @@ namespace MainWindow
 		static bool firstErase = true;
 
 		switch (message) {
-		case WM_ACTIVATE:
-			if (wParam == WA_ACTIVE || wParam == WA_CLICKACTIVE) {
-				g_activeWindow = WINDOW_MAINWINDOW;
-			}
-			break;
-
 		case WM_SIZE:
 			break;
 
 		case WM_SETFOCUS:
+			break;
+
+		case WM_SETCURSOR:
+			if ((lParam & 0xFFFF) == HTCLIENT && g_Config.bShowImDebugger) {
+				LPTSTR win32_cursor = 0;
+				if (g_Config.bShowImDebugger) {
+					switch (ImGui_ImplPlatform_GetCursor()) {
+					case ImGuiMouseCursor_Arrow:        win32_cursor = IDC_ARROW; break;
+					case ImGuiMouseCursor_TextInput:    win32_cursor = IDC_IBEAM; break;
+					case ImGuiMouseCursor_ResizeAll:    win32_cursor = IDC_SIZEALL; break;
+					case ImGuiMouseCursor_ResizeEW:     win32_cursor = IDC_SIZEWE; break;
+					case ImGuiMouseCursor_ResizeNS:     win32_cursor = IDC_SIZENS; break;
+					case ImGuiMouseCursor_ResizeNESW:   win32_cursor = IDC_SIZENESW; break;
+					case ImGuiMouseCursor_ResizeNWSE:   win32_cursor = IDC_SIZENWSE; break;
+					case ImGuiMouseCursor_Hand:         win32_cursor = IDC_HAND; break;
+					case ImGuiMouseCursor_NotAllowed:   win32_cursor = IDC_NO; break;
+					}
+				}
+				if (win32_cursor) {
+					SetCursor(::LoadCursor(nullptr, win32_cursor));
+				} else {
+					SetCursor(nullptr);
+				}
+				return TRUE;
+			} else {
+				return DefWindowProc(hWnd, message, wParam, lParam);
+			}
 			break;
 
 		case WM_ERASEBKGND:
@@ -632,29 +660,29 @@ namespace MainWindow
 				float y = GET_Y_LPARAM(lParam) * g_display.dpi_scale_y;
 				WindowsRawInput::SetMousePos(x, y);
 
-				TouchInput touch;
-				touch.id = 0;
-				touch.flags = TOUCH_DOWN;
+				TouchInput touch{};
+				touch.flags = TOUCH_DOWN | TOUCH_MOUSE;
+				touch.buttons = 1;
 				touch.x = x;
 				touch.y = y;
 				NativeTouch(touch);
 				SetCapture(hWnd);
 
 				// Simulate doubleclick, doesn't work with RawInput enabled
-				static double lastMouseDown;
+				static double lastMouseDownTime;
 				static float lastMouseDownX = -1.0f;
 				static float lastMouseDownY = -1.0f;
-				double now = time_now_d();
-				if ((now - lastMouseDown) < 0.001 * GetDoubleClickTime()) {
-					float dx = lastMouseDownX - x;
-					float dy = lastMouseDownY - y;
-					float distSq = dx * dx + dy * dy;
-					if (distSq < 3.0f*3.0f && !g_Config.bShowTouchControls && !g_Config.bMouseControl && GetUIState() == UISTATE_INGAME && g_Config.bFullscreenOnDoubleclick) {
+				const double now = time_now_d();
+				if ((now - lastMouseDownTime) < 0.001 * GetDoubleClickTime()) {
+					const float dx = lastMouseDownX - x;
+					const float dy = lastMouseDownY - y;
+					const float distSq = dx * dx + dy * dy;
+					if (distSq < 3.0f*3.0f && !g_Config.bShowTouchControls && !g_Config.bShowImDebugger && !g_Config.bMouseControl && GetUIState() == UISTATE_INGAME && g_Config.bFullscreenOnDoubleclick) {
 						SendToggleFullscreen(!g_Config.UseFullScreen());
 					}
-					lastMouseDown = 0.0;
+					lastMouseDownTime = 0.0;
 				} else {
-					lastMouseDown = now;
+					lastMouseDownTime = now;
 				}
 				lastMouseDownX = x;
 				lastMouseDownY = y;
@@ -680,14 +708,18 @@ namespace MainWindow
 				float y = (float)cursorY * g_display.dpi_scale_y;
 				WindowsRawInput::SetMousePos(x, y);
 
+				// Mouse moves now happen also when no button is pressed.
+				TouchInput touch{};
+				touch.flags = TOUCH_MOVE | TOUCH_MOUSE;
 				if (wParam & MK_LBUTTON) {
-					TouchInput touch;
-					touch.id = 0;
-					touch.flags = TOUCH_MOVE;
-					touch.x = x;
-					touch.y = y;
-					NativeTouch(touch);
+					touch.buttons |= 1;
 				}
+				if (wParam & MK_RBUTTON) {
+					touch.buttons |= 2;
+				}
+				touch.x = x;
+				touch.y = y;
+				NativeTouch(touch);
 			}
 			break;
 
@@ -702,9 +734,9 @@ namespace MainWindow
 				float y = (float)GET_Y_LPARAM(lParam) * g_display.dpi_scale_y;
 				WindowsRawInput::SetMousePos(x, y);
 
-				TouchInput touch;
-				touch.id = 0;
-				touch.flags = TOUCH_UP;
+				TouchInput touch{};
+				touch.buttons = 1;
+				touch.flags = TOUCH_UP | TOUCH_MOUSE;
 				touch.x = x;
 				touch.y = y;
 				NativeTouch(touch);
@@ -715,6 +747,34 @@ namespace MainWindow
 		case WM_TOUCH:
 			touchHandler.handleTouchEvent(hWnd, message, wParam, lParam);
 			return 0;
+
+		case WM_RBUTTONDOWN:
+		{
+			float x = GET_X_LPARAM(lParam) * g_display.dpi_scale_x;
+			float y = GET_Y_LPARAM(lParam) * g_display.dpi_scale_y;
+
+			TouchInput touch{};
+			touch.buttons = 2;
+			touch.flags = TOUCH_DOWN | TOUCH_MOUSE;
+			touch.x = x;
+			touch.y = y;
+			NativeTouch(touch);
+			break;
+		}
+
+		case WM_RBUTTONUP:
+		{
+			float x = GET_X_LPARAM(lParam) * g_display.dpi_scale_x;
+			float y = GET_Y_LPARAM(lParam) * g_display.dpi_scale_y;
+
+			TouchInput touch{};
+			touch.buttons = 2;
+			touch.flags = TOUCH_UP | TOUCH_MOUSE;
+			touch.x = x;
+			touch.y = y;
+			NativeTouch(touch);
+			break;
+		}
 
 		default:
 			return DefWindowProc(hWnd, message, wParam, lParam);
@@ -761,7 +821,7 @@ namespace MainWindow
 
 		switch (message) {
 		case WM_CREATE:
-			if (!DoesVersionMatchWindows(6, 0, 0, 0, true)) {
+			if (!IsVistaOrHigher()) {
 				// Remove the D3D11 choice on versions below XP
 				RemoveMenu(GetMenu(hWnd), ID_OPTIONS_DIRECT3D11, MF_BYCOMMAND);
 			}
@@ -770,6 +830,13 @@ namespace MainWindow
 			}
 			break;
 
+		case WM_USER_RUN_CALLBACK:
+		{
+			auto callback = reinterpret_cast<void (*)(void *window, void *userdata)>(wParam);
+			void *userdata = reinterpret_cast<void *>(lParam);
+			callback(hWnd, userdata);
+			break;
+		}
 		case WM_USER_GET_BASE_POINTER:
 			Reporting::NotifyDebugger();
 			switch (lParam) {
@@ -829,13 +896,20 @@ namespace MainWindow
 					}
 					g_activeWindow = WINDOW_MAINWINDOW;
 					pause = false;
+				} else {
+					g_activeWindow = WINDOW_OTHER;
 				}
 				if (!noFocusPause && g_Config.bPauseOnLostFocus && GetUIState() == UISTATE_INGAME) {
-					if (pause != Core_IsStepping()) {	// != is xor for bools
-						if (disasmWindow)
+					if (pause != Core_IsStepping()) {
+						if (disasmWindow) {
 							SendMessage(disasmWindow->GetDlgHandle(), WM_COMMAND, IDC_STOPGO, 0);
-						else
-							Core_EnableStepping(pause, "ui.lost_focus", 0);
+						} else {
+							if (pause) {
+								Core_Break("ui.lost_focus", 0);
+							} else {
+								Core_Resume();
+							}
+						}
 					}
 				}
 
@@ -890,7 +964,7 @@ namespace MainWindow
 				break;
 
 			case SIZE_MINIMIZED:
-				Core_NotifyWindowHidden(true);
+				Native_NotifyWindowHidden(true);
 				if (!g_Config.bPauseWhenMinimized) {
 					System_PostUIMessage(UIMessage::WINDOW_MINIMIZED, "true");
 				}
@@ -1000,19 +1074,18 @@ namespace MainWindow
 					return DefWindowProc(hWnd, message, wParam, lParam);
 
 				HDROP hdrop = (HDROP)wParam;
-				int count = DragQueryFile(hdrop,0xFFFFFFFF,0,0);
+				int count = DragQueryFile(hdrop, 0xFFFFFFFF, 0, 0);
 				if (count != 1) {
-					MessageBox(hwndMain,L"You can only load one file at a time",L"Error",MB_ICONINFORMATION);
-				}
-				else
-				{
-					TCHAR filename[512];
-					if (DragQueryFile(hdrop, 0, filename, 512) != 0) {
+					// TODO: Translate? Or just not bother?
+					MessageBox(hwndMain, L"You can only load one file at a time", L"Error", MB_ICONINFORMATION);
+				} else {
+					TCHAR filename[1024];
+					if (DragQueryFile(hdrop, 0, filename, ARRAY_SIZE(filename)) != 0) {
 						const std::string utf8_filename = ReplaceAll(ConvertWStringToUTF8(filename), "\\", "/");
 						System_PostUIMessage(UIMessage::REQUEST_GAME_BOOT, utf8_filename);
-						Core_EnableStepping(false);
 					}
 				}
+				DragFinish(hdrop);
 			}
 			break;
 
@@ -1075,20 +1148,32 @@ namespace MainWindow
 			trapMouse = true;
 			break;
 
-		// Turn off the screensaver.
+		// Turn off the screensaver if in-game.
 		// Note that if there's a screensaver password, this simple method
 		// doesn't work on Vista or higher.
 		case WM_SYSCOMMAND:
-			{
+			// Disable Alt key for menu if it's been mapped.
+			if (wParam == SC_KEYMENU && (lParam >> 16) <= 0) {
+				if (KeyMap::IsKeyMapped(DEVICE_ID_KEYBOARD, NKCODE_ALT_LEFT) || KeyMap::IsKeyMapped(DEVICE_ID_KEYBOARD, NKCODE_ALT_RIGHT)) {
+					return 0;
+				}
+			}
+			if (g_keepScreenBright) {
 				switch (wParam) {
 				case SC_SCREENSAVE:
 					return 0;
 				case SC_MONITORPOWER:
-					return 0;
+					if (lParam == 1 || lParam == 2) {
+						return 0;
+					} else {
+						break;
+					}
+				default:
+					// fall down to DefWindowProc
+					break;
 				}
-				return DefWindowProc(hWnd, message, wParam, lParam);
 			}
-			break;
+			return DefWindowProc(hWnd, message, wParam, lParam);
 		case WM_SETTINGCHANGE:
 			{
 				if (g_darkModeSupported && IsColorSchemeChangeMessage(lParam))
@@ -1122,11 +1207,11 @@ namespace MainWindow
 
 	void ToggleDebugConsoleVisibility() {
 		if (!g_Config.bEnableLogging) {
-			LogManager::GetInstance()->GetConsoleListener()->Show(false);
+			g_logManager.GetConsoleListener()->Show(false);
 			EnableMenuItem(menu, ID_DEBUG_LOG, MF_GRAYED);
 		}
 		else {
-			LogManager::GetInstance()->GetConsoleListener()->Show(true);
+			g_logManager.GetConsoleListener()->Show(true);
 			EnableMenuItem(menu, ID_DEBUG_LOG, MF_ENABLED);
 		}
 	}
@@ -1137,6 +1222,10 @@ namespace MainWindow
 
 	bool IsFullscreen() {
 		return g_isFullscreen;
+	}
+
+	void RunCallbackInWndProc(void (*callback)(void *, void *), void *userdata) {
+		PostMessage(hwndMain, WM_USER_RUN_CALLBACK, reinterpret_cast<WPARAM>(callback), reinterpret_cast<LPARAM>(userdata));
 	}
 
 }  // namespace

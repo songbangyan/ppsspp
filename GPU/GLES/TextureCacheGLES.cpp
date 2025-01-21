@@ -15,34 +15,23 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
-#include <algorithm>
 #include <cstring>
 
 #include "ext/xxhash.h"
 #include "Common/Common.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/Data/Text/I18n.h"
-#include "Common/Math/math_util.h"
 #include "Common/Profiler/Profiler.h"
 #include "Common/System/OSD.h"
 #include "Common/GPU/OpenGL/GLRenderManager.h"
 #include "Common/TimeUtil.h"
 
-#include "Core/Config.h"
-#include "Core/MemMap.h"
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
 #include "GPU/GLES/TextureCacheGLES.h"
 #include "GPU/GLES/FramebufferManagerGLES.h"
-#include "GPU/Common/FragmentShaderGenerator.h"
 #include "GPU/Common/TextureShaderCommon.h"
-#include "GPU/GLES/ShaderManagerGLES.h"
-#include "GPU/GLES/DrawEngineGLES.h"
-#include "GPU/Common/TextureDecoder.h"
-
-#ifdef _M_SSE
-#include <emmintrin.h>
-#endif
+#include "GPU/Common/DrawEngineCommon.h"
 
 TextureCacheGLES::TextureCacheGLES(Draw::DrawContext *draw, Draw2D *draw2D)
 	: TextureCacheCommon(draw, draw2D) {
@@ -73,7 +62,7 @@ void TextureCacheGLES::Clear(bool delete_them) {
 	TextureCacheCommon::Clear(delete_them);
 }
 
-Draw::DataFormat getClutDestFormat(GEPaletteFormat format) {
+static Draw::DataFormat getClutDestFormat(GEPaletteFormat format) {
 	switch (format) {
 	case GE_CMODE_16BIT_ABGR4444:
 		return Draw::DataFormat::R4G4B4A4_UNORM_PACK16;
@@ -319,9 +308,10 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 			}
 
 			data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+			_assert_msg_(data != nullptr, "Failed to allocate aligned memory for texture level %d: %d bytes (%dx%d)", i, (int)dataSize, mipWidth, mipHeight);
 
 			if (!data) {
-				ERROR_LOG(G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", mipWidth, mipHeight);
+				ERROR_LOG(Log::G3D, "Ran out of RAM trying to allocate a temporary texture upload buffer (%dx%d)", mipWidth, mipHeight);
 				return;
 			}
 
@@ -341,6 +331,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 
 		size_t dataSize = levelStride * plan.depth;
 		u8 *data = (u8 *)AllocateAlignedMemory(dataSize, 16);
+		_assert_msg_(data != nullptr, "Failed to allocate aligned memory for 3d texture: %d bytes", (int)dataSize);
 		memset(data, 0, levelStride * plan.depth);
 		u8 *p = data;
 
@@ -362,7 +353,7 @@ void TextureCacheGLES::BuildTexture(TexCacheEntry *const entry) {
 	}
 }
 
-Draw::DataFormat TextureCacheGLES::GetDestFormat(GETextureFormat format, GEPaletteFormat clutFormat) const {
+Draw::DataFormat TextureCacheGLES::GetDestFormat(GETextureFormat format, GEPaletteFormat clutFormat) {
 	switch (format) {
 	case GE_TFMT_CLUT4:
 	case GE_TFMT_CLUT8:
@@ -395,7 +386,7 @@ bool TextureCacheGLES::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level,
 	TexCacheEntry *entry = nextTexture_;
 	// We might need a render pass to set the sampling params, unfortunately.  Otherwise BuildTexture may crash.
 	framebufferManagerGL_->RebindFramebuffer("RebindFramebuffer - GetCurrentTextureDebug");
-	ApplyTexture();
+	ApplyTexture(false);
 
 	GLRenderManager *renderManager = (GLRenderManager *)draw_->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
 
@@ -409,7 +400,7 @@ bool TextureCacheGLES::GetCurrentTextureDebug(GPUDebugBuffer &buffer, int level,
 		buffer.Allocate(w, h, GE_FORMAT_8888, false);
 		renderManager->CopyImageToMemorySync(entry->textureName, level, 0, 0, w, h, Draw::DataFormat::R8G8B8A8_UNORM, (uint8_t *)buffer.GetData(), w, "GetCurrentTextureDebug");
 	} else {
-		ERROR_LOG(G3D, "Failed to get debug texture: texture is null");
+		ERROR_LOG(Log::G3D, "Failed to get debug texture: texture is null");
 	}
 	gstate_c.Dirty(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS);
 	framebufferManager_->RebindFramebuffer("RebindFramebuffer - GetCurrentTextureDebug");
@@ -431,7 +422,7 @@ void TextureCacheGLES::DeviceRestore(Draw::DrawContext *draw) {
 	textureShaderCache_->DeviceRestore(draw);
 }
 
-void *TextureCacheGLES::GetNativeTextureView(const TexCacheEntry *entry) {
+void *TextureCacheGLES::GetNativeTextureView(const TexCacheEntry *entry, bool flat) const {
 	GLRTexture *tex = entry->textureName;
 	return (void *)tex;
 }

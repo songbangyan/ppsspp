@@ -24,17 +24,7 @@
 #include "GPU/GPU.h"
 #include "GPU/ge_constants.h"
 #include "GPU/Common/ShaderCommon.h"
-
-#if defined(_M_SSE)
-#include <emmintrin.h>
-#endif
-#if PPSSPP_ARCH(ARM_NEON)
-#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
-#include <arm64_neon.h>
-#else
-#include <arm_neon.h>
-#endif
-#endif
+#include "Common/Math/SIMDHeaders.h"
 
 class PointerWrap;
 
@@ -237,7 +227,7 @@ struct GPUgstate {
 
 	// Cull
 	bool isCullEnabled() const { return cullfaceEnable & 1; }
-	int getCullMode()   const { return cullmode & 1; }
+	GECullMode getCullMode()   const { return (GECullMode)(cullmode & 1); }
 
 	// Color Mask
 	bool isClearModeColorMask() const { return (clearmode&0x100) != 0; }
@@ -456,7 +446,7 @@ struct GPUgstate {
 
 	// Real data in the context ends here
 
-	void Reset();
+	static void Reset();
 	void Save(u32_le *ptr);
 	void Restore(const u32_le *ptr);
 };
@@ -589,6 +579,9 @@ struct GPUStateCache {
 			Dirty(DIRTY_FRAGMENTSHADER_STATE);
 		}
 	}
+	void SetTextureIsVideo(bool isVideo) {
+		textureIsVideo = isVideo;
+	}
 	void SetTextureIsBGRA(bool isBGRA) {
 		if (bgraTexture != isBGRA) {
 			bgraTexture = isBGRA;
@@ -657,6 +650,7 @@ public:
 	bool needShaderTexClamp;
 	bool textureIsArray;
 	bool textureIsFramebuffer;
+	bool textureIsVideo;
 	bool useFlagsChanged;
 
 	float morphWeights[8];
@@ -689,6 +683,9 @@ public:
 	// We detect this case and go into a special drawing mode.
 	bool blueToAlpha;
 
+	// U/V is 1:1 to pixels. Can influence texture sampling.
+	bool pixelMapped;
+
 	// TODO: These should be accessed from the current VFB object directly.
 	u32 curRTWidth;
 	u32 curRTHeight;
@@ -713,7 +710,7 @@ public:
 	GEBufferFormat depalFramebufferFormat;
 
 	u32 getRelativeAddress(u32 data) const;
-	void Reset();
+	static void Reset();
 	void DoState(PointerWrap &p);
 };
 

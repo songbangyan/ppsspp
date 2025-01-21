@@ -452,14 +452,20 @@ public:
 		return error;
 	};
 
-	bool IsValid(SceUID handle) const;
+	bool IsValid(SceUID handle) const {
+		int index = handle - handleOffset;
+		if (index < 0 || index >= maxCount)
+			return false;
+		else
+			return occupied[index];
+	}
 
 	template <class T>
 	T* Get(SceUID handle, u32 &outError) {
 		if (handle < handleOffset || handle >= handleOffset+maxCount || !occupied[handle-handleOffset]) {
 			// Tekken 6 spams 0x80020001 gets wrong with no ill effects, also on the real PSP
 			if (handle != 0 && (u32)handle != 0x80020001) {
-				WARN_LOG(SCEKERNEL, "Kernel: Bad %s handle %d (%08x)", T::GetStaticTypeName(), handle, handle);
+				WARN_LOG(Log::sceKernel, "Kernel: Bad %s handle %d (%08x)", T::GetStaticTypeName(), handle, handle);
 			}
 			outError = T::GetMissingErrorCode();
 			return 0;
@@ -469,7 +475,7 @@ public:
 			// see the Wrong type object error below, but we'll just have to live with that danger.
 			T* t = static_cast<T*>(pool[handle - handleOffset]);
 			if (t == nullptr || t->GetIDType() != T::GetStaticIDType()) {
-				WARN_LOG(SCEKERNEL, "Kernel: Wrong object type for %d (%08x), was %s, should have been %s", handle, handle, t ? t->GetTypeName() : "null", T::GetStaticTypeName());
+				WARN_LOG(Log::sceKernel, "Kernel: Wrong object type for %d (%08x), was %s, should have been %s", handle, handle, t ? t->GetTypeName() : "null", T::GetStaticTypeName());
 				outError = T::GetMissingErrorCode();
 				return 0;
 			}
@@ -518,7 +524,7 @@ public:
 
 	bool GetIDType(SceUID handle, int *type) const {
 		if (handle < handleOffset || handle >= handleOffset+maxCount || !occupied[handle-handleOffset]) {
-			ERROR_LOG(SCEKERNEL, "Kernel: Bad object handle %i (%08x)", handle, handle);
+			ERROR_LOG(Log::sceKernel, "Kernel: Bad object handle %i (%08x)", handle, handle);
 			return false;
 		}
 		KernelObject *t = pool[handle - handleOffset];
@@ -530,12 +536,12 @@ public:
 	void Clear();
 	int GetCount() const;
 
-private:
 	enum {
 		maxCount = 4096,
 		handleOffset = 0x100,
 		initialNextID = 0x10
 	};
+private:
 	KernelObject *pool[maxCount];
 	bool occupied[maxCount];
 	int nextID;
@@ -568,6 +574,9 @@ struct KernelStats {
 
 extern KernelStats kernelStats;
 extern u32 registeredExitCbId;
+
+extern u32 g_GPOBits;
+extern u32 g_GPIBits;
 
 void Register_ThreadManForUser();
 void Register_ThreadManForKernel();

@@ -22,15 +22,9 @@
 
 #include <map>
 
-#include "Common/Math/lin/matrix4x4.h"
-#include "Common/Math/math_util.h"
-#include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/GPU/thin3d.h"
-#include "Common/Data/Encoding/Utf8.h"
 #include "Common/Log.h"
 #include "Common/CommonTypes.h"
-#include "Core/Config.h"
-#include "GPU/Math3D.h"
 #include "GPU/GPUState.h"
 #include "GPU/ge_constants.h"
 #include "GPU/Common/VertexShaderGenerator.h"
@@ -117,11 +111,11 @@ ShaderManagerD3D11::~ShaderManagerD3D11() {
 }
 
 void ShaderManagerD3D11::Clear() {
-	for (auto iter = fsCache_.begin(); iter != fsCache_.end(); ++iter) {
-		delete iter->second;
+	for (const auto &[_, fs] : fsCache_) {
+		delete fs;
 	}
-	for (auto iter = vsCache_.begin(); iter != vsCache_.end(); ++iter) {
-		delete iter->second;
+	for (const auto &[_, vs] : vsCache_) {
+		delete vs;
 	}
 	fsCache_.clear();
 	vsCache_.clear();
@@ -251,7 +245,6 @@ std::vector<std::string> ShaderManagerD3D11::DebugGetShaderIDs(DebugShaderType t
 	switch (type) {
 	case SHADER_TYPE_VERTEX:
 	{
-		ids.reserve(vsCache_.size());
 		for (auto iter : vsCache_) {
 			iter.first.ToString(&id);
 			ids.push_back(id);
@@ -260,7 +253,6 @@ std::vector<std::string> ShaderManagerD3D11::DebugGetShaderIDs(DebugShaderType t
 	}
 	case SHADER_TYPE_FRAGMENT:
 	{
-		ids.reserve(fsCache_.size());
 		for (auto iter : fsCache_) {
 			iter.first.ToString(&id);
 			ids.push_back(id);

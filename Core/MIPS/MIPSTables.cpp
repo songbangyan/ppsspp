@@ -18,7 +18,6 @@
 #include "Common/StringUtils.h"
 
 #include "Core/Core.h"
-#include "Core/System.h"
 #include "Core/MemMap.h"
 #include "Core/MIPS/MIPS.h"
 #include "Core/MIPS/MIPSDis.h"
@@ -188,7 +187,7 @@ static const MIPSInstruction tableSpecial[64] = // 000000 ..... ..... ..... ....
 	INSTR("jalr",  JITFUNC(Comp_JumpReg), Dis_JumpRegType, Int_JumpRegType, IS_JUMP|IN_RS|OUT_RD|DELAYSLOT),
 	INSTR("movz",  JITFUNC(Comp_RType3), Dis_RType3, Int_RType3, OUT_RD|IN_RS|IN_RT|IS_CONDMOVE|CONDTYPE_EQ),
 	INSTR("movn",  JITFUNC(Comp_RType3), Dis_RType3, Int_RType3, OUT_RD|IN_RS|IN_RT|IS_CONDMOVE|CONDTYPE_NE),
-	INSTR("syscall", JITFUNC(Comp_Syscall), Dis_Syscall, Int_Syscall, IN_MEM|IN_OTHER|OUT_MEM|OUT_OTHER),
+	INSTR("syscall", JITFUNC(Comp_Syscall), Dis_Syscall, Int_Syscall, IN_MEM|IN_OTHER|OUT_MEM|OUT_OTHER|IS_SYSCALL),
 	INSTR("break", JITFUNC(Comp_Break), Dis_Generic, Int_Break, 0),
 	INVALID,
 	INSTR("sync",  JITFUNC(Comp_DoNothing), Dis_Generic, Int_Sync, 0),
@@ -887,7 +886,7 @@ const MIPSInstruction *MIPSGetInstruction(MIPSOpcode op) {
 	const MIPSInstruction *instr = &tableImmediate[op.encoding >> 26];
 	while (instr->altEncoding != Instruc) {
 		if (instr->altEncoding == Inval) {
-			//ERROR_LOG(CPU, "Invalid instruction %08x in table %i, entry %i", op, (int)encoding, subop);
+			//ERROR_LOG(Log::CPU, "Invalid instruction %08x in table %i, entry %i", op, (int)encoding, subop);
 			return 0; //invalid instruction
 		}
 		encoding = instr->altEncoding;
@@ -909,12 +908,12 @@ void MIPSCompileOp(MIPSOpcode op, MIPSComp::MIPSFrontendInterface *jit) {
 		if (instr->compile) {
 			(jit->*(instr->compile))(op);
 		} else {
-			ERROR_LOG_REPORT(CPU,"MIPSCompileOp %08x failed",op.encoding);
+			ERROR_LOG_REPORT(Log::CPU,"MIPSCompileOp %08x failed",op.encoding);
 		}
 		if (info & OUT_EAT_PREFIX)
 			jit->EatPrefix();
 	} else {
-		ERROR_LOG_REPORT(CPU, "MIPSCompileOp: Invalid instruction %08x", op.encoding);
+		ERROR_LOG_REPORT(Log::CPU, "MIPSCompileOp: Invalid instruction %08x", op.encoding);
 	}
 }
 
@@ -942,7 +941,7 @@ static inline void Interpret(const MIPSInstruction *instr, MIPSOpcode op) {
 	if (instr && instr->interpret) {
 		instr->interpret(op);
 	} else {
-		ERROR_LOG_REPORT(CPU, "Unknown instruction %08x at %08x", op.encoding, currentMIPS->pc);
+		ERROR_LOG_REPORT(Log::CPU, "Unknown instruction %08x at %08x", op.encoding, currentMIPS->pc);
 		// Try to disassemble it
 		char disasm[256];
 		MIPSDisAsm(op, currentMIPS->pc, disasm, sizeof(disasm));
@@ -970,7 +969,7 @@ void MIPSInterpret(MIPSOpcode op) {
 static inline void RunUntilFast() {
 	MIPSState *curMips = currentMIPS;
 	// NEVER stop in a delay slot!
-	while (curMips->downcount >= 0 && coreState == CORE_RUNNING) {
+	while (curMips->downcount >= 0 && coreState == CORE_RUNNING_CPU) {
 		do {
 			// Replacements and similar are processed here, intentionally.
 			MIPSOpcode op = MIPSOpcode(Memory::Read_U32(curMips->pc));
@@ -992,37 +991,37 @@ static inline void RunUntilFast() {
 static void RunUntilWithChecks(u64 globalTicks) {
 	MIPSState *curMips = currentMIPS;
 	// NEVER stop in a delay slot!
-	bool hasBPs = CBreakPoints::HasBreakPoints();
-	bool hasMCs = CBreakPoints::HasMemChecks();
-	while (curMips->downcount >= 0 && coreState == CORE_RUNNING) {
+	bool hasBPs = g_breakpoints.HasBreakPoints();
+	bool hasMCs = g_breakpoints.HasMemChecks();
+	while (curMips->downcount >= 0 && coreState == CORE_RUNNING_CPU) {
 		do {
 			// Replacements and similar are processed here, intentionally.
 			MIPSOpcode op = MIPSOpcode(Memory::Read_U32(curMips->pc));
 			const MIPSInstruction *instr = MIPSGetInstruction(op);
 
 			// Check for breakpoint
-			if (hasBPs && CBreakPoints::IsAddressBreakPoint(curMips->pc) && CBreakPoints::CheckSkipFirst() != curMips->pc) {
-				auto cond = CBreakPoints::GetBreakPointCondition(currentMIPS->pc);
+			if (hasBPs && g_breakpoints.IsAddressBreakPoint(curMips->pc) && g_breakpoints.CheckSkipFirst() != curMips->pc) {
+				auto cond = g_breakpoints.GetBreakPointCondition(currentMIPS->pc);
 				if (!cond || cond->Evaluate()) {
-					Core_EnableStepping(true, "cpu.breakpoint", curMips->pc);
-					if (CBreakPoints::IsTempBreakPoint(curMips->pc))
-						CBreakPoints::RemoveBreakPoint(curMips->pc);
+					Core_Break("cpu.breakpoint", curMips->pc);
+					if (g_breakpoints.IsTempBreakPoint(curMips->pc))
+						g_breakpoints.RemoveBreakPoint(curMips->pc);
 					break;
 				}
 			}
-			if (hasMCs && (instr->flags & (IN_MEM | OUT_MEM)) != 0 && CBreakPoints::CheckSkipFirst() != curMips->pc && instr->interpret != &Int_Syscall) {
+			if (hasMCs && (instr->flags & (IN_MEM | OUT_MEM)) != 0 && g_breakpoints.CheckSkipFirst() != curMips->pc && instr->interpret != &Int_Syscall) {
 				// This is common for all IN_MEM/OUT_MEM funcs.
 				int offset = (instr->flags & IS_VFPU) != 0 ? SignExtend16ToS32(op & 0xFFFC) : SignExtend16ToS32(op);
 				u32 addr = (R(_RS) + offset) & 0xFFFFFFFC;
 				int sz = MIPSGetMemoryAccessSize(op);
 
 				if ((instr->flags & IN_MEM) != 0)
-					CBreakPoints::ExecMemCheck(addr, false, sz, curMips->pc, "interpret");
+					g_breakpoints.ExecMemCheck(addr, false, sz, curMips->pc, "interpret");
 				if ((instr->flags & OUT_MEM) != 0)
-					CBreakPoints::ExecMemCheck(addr, true, sz, curMips->pc, "interpret");
+					g_breakpoints.ExecMemCheck(addr, true, sz, curMips->pc, "interpret");
 
 				// If it tripped, bail without running.
-				if (coreState == CORE_STEPPING)
+				if (coreState == CORE_STEPPING_CPU)
 					break;
 			}
 
@@ -1044,17 +1043,17 @@ static void RunUntilWithChecks(u64 globalTicks) {
 
 int MIPSInterpret_RunUntil(u64 globalTicks) {
 	MIPSState *curMips = currentMIPS;
-	while (coreState == CORE_RUNNING) {
+	while (coreState == CORE_RUNNING_CPU) {
 		CoreTiming::Advance();
 
 		uint64_t ticksLeft = globalTicks - CoreTiming::GetTicks();
-		if (CBreakPoints::HasBreakPoints() || CBreakPoints::HasMemChecks() || ticksLeft <= curMips->downcount)
+		if (g_breakpoints.HasBreakPoints() || g_breakpoints.HasMemChecks() || ticksLeft <= curMips->downcount)
 			RunUntilWithChecks(globalTicks);
 		else
 			RunUntilFast();
 
 		if (CoreTiming::GetTicks() > globalTicks) {
-			// DEBUG_LOG(CPU, "Hit the max ticks, bailing 1 : %llu, %llu", globalTicks, CoreTiming::GetTicks());
+			// DEBUG_LOG(Log::CPU, "Hit the max ticks, bailing 1 : %llu, %llu", globalTicks, CoreTiming::GetTicks());
 			return 1;
 		}
 	}
@@ -1064,7 +1063,7 @@ int MIPSInterpret_RunUntil(u64 globalTicks) {
 
 const char *MIPSGetName(MIPSOpcode op)
 {
-	static const char *noname = "unk";
+	static const char * const noname = "unk";
 	const MIPSInstruction *instr = MIPSGetInstruction(op);
 	if (!instr)
 		return noname;

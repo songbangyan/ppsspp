@@ -6,7 +6,7 @@
 #include "Common/System/Display.h"
 #include "UI/TabbedDialogScreen.h"
 
-UI::LinearLayout *TabbedUIDialogScreenWithGameBackground::AddTab(const char *tag, const std::string &title, bool isSearch) {
+UI::LinearLayout *TabbedUIDialogScreenWithGameBackground::AddTab(const char *tag, std::string_view title, bool isSearch) {
 	using namespace UI;
 	ViewGroup *scroll = new ScrollView(ORIENT_VERTICAL, new LinearLayoutParams(FILL_PARENT, FILL_PARENT));
 	scroll->SetTag(tag);
@@ -45,12 +45,14 @@ void TabbedUIDialogScreenWithGameBackground::CreateViews() {
 		LinearLayout *verticalLayout = new LinearLayout(ORIENT_VERTICAL, new LayoutParams(FILL_PARENT, FILL_PARENT));
 		tabHolder_ = new TabHolder(ORIENT_HORIZONTAL, 200, new LinearLayoutParams(1.0f));
 		verticalLayout->Add(tabHolder_);
+		CreateExtraButtons(verticalLayout, 0);
 		verticalLayout->Add(new Choice(di->T("Back"), "", false, new LinearLayoutParams(FILL_PARENT, WRAP_CONTENT, 0.0f, Margins(0))))->OnClick.Handle<UIScreen>(this, &UIScreen::OnBack);
 		root_->Add(verticalLayout);
 	} else {
 		tabHolder_ = new TabHolder(ORIENT_VERTICAL, 200, new AnchorLayoutParams(10, 0, 10, 0, false));
+		CreateExtraButtons(tabHolder_->Container(), 10);
+		tabHolder_->AddBack(this);
 		root_->Add(tabHolder_);
-		AddStandardBack(root_);
 	}
 	tabHolder_->SetTag(tag());  // take the tag from the screen.
 	root_->SetDefaultFocusView(tabHolder_);
@@ -84,7 +86,7 @@ void TabbedUIDialogScreenWithGameBackground::CreateViews() {
 			LinearLayout *searchSettings = AddTab("GameSettingsSearch", ms->T("Search"), true);
 
 			searchSettings->Add(new ItemHeader(se->T("Find settings")));
-			searchSettings->Add(new PopupTextInputChoice(&searchFilter_, se->T("Filter"), "", 64, screenManager()))->OnChange.Add([=](UI::EventParams &e) {
+			searchSettings->Add(new PopupTextInputChoice(GetRequesterToken(), &searchFilter_, se->T("Filter"), "", 64, screenManager()))->OnChange.Add([=](UI::EventParams &e) {
 				System_PostUIMessage(UIMessage::GAMESETTINGS_SEARCH, StripSpaces(searchFilter_));
 				return UI::EVENT_DONE;
 			});

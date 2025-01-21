@@ -5,20 +5,20 @@ mod section;
 mod inifile;
 use inifile::IniFile;
 
-use structopt::StructOpt;
+use clap::Parser;
 
-#[derive(StructOpt, Debug)]
-struct Opt {
-    #[structopt(subcommand)]
+#[derive(Parser, Debug)]
+struct Args {
+    #[command(subcommand)]
     cmd: Command,
-    #[structopt(short, long)]
+    #[arg(short, long)]
     dry_run: bool,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 enum Command {
     CopyMissingLines {
-        #[structopt(short, long)]
+        #[arg(short, long)]
         dont_comment_missing: bool,
     },
     CommentUnknownLines {},
@@ -27,10 +27,25 @@ enum Command {
         section: String,
         key: String,
     },
+    AddNewKeyValue {
+        section: String,
+        key: String,
+        value: String,
+    },
     MoveKey {
         old: String,
         new: String,
         key: String,
+    },
+    CopyKey {
+        old: String,
+        new: String,
+        key: String,
+    },
+    DupeKey {
+        section: String,
+        old: String,
+        new: String,
     },
     RenameKey {
         section: String,
@@ -107,6 +122,23 @@ fn move_key(target_ini: &mut IniFile, old: &str, new: &str, key: &str) -> io::Re
     Ok(())
 }
 
+fn copy_key(target_ini: &mut IniFile, old: &str, new: &str, key: &str) -> io::Result<()> {
+    if let Some(old_section) = target_ini.get_section_mut(old) {
+        if let Some(line) = old_section.get_line(key) {
+            if let Some(new_section) = target_ini.get_section_mut(new) {
+                new_section.insert_line_if_missing(&line);
+            } else {
+                println!("No new section {}", new);
+            }
+        } else {
+            println!("No key {} in section {}", key, old);
+        }
+    } else {
+        println!("No old section {}", old);
+    }
+    Ok(())
+}
+
 fn remove_key(target_ini: &mut IniFile, section: &str, key: &str) -> io::Result<()> {
     if let Some(old_section) = target_ini.get_section_mut(section) {
         old_section.remove_line(key);
@@ -116,9 +148,9 @@ fn remove_key(target_ini: &mut IniFile, section: &str, key: &str) -> io::Result<
     Ok(())
 }
 
-fn add_new_key(target_ini: &mut IniFile, section: &str, key: &str) -> io::Result<()> {
+fn add_new_key(target_ini: &mut IniFile, section: &str, key: &str, value: &str) -> io::Result<()> {
     if let Some(section) = target_ini.get_section_mut(section) {
-        section.insert_line_if_missing(&format!("{} = {}", key, key));
+        section.insert_line_if_missing(&format!("{} = {}", key, value));
     } else {
         println!("No section {}", section);
     }
@@ -128,6 +160,15 @@ fn add_new_key(target_ini: &mut IniFile, section: &str, key: &str) -> io::Result
 fn rename_key(target_ini: &mut IniFile, section: &str, old: &str, new: &str) -> io::Result<()> {
     if let Some(section) = target_ini.get_section_mut(section) {
         section.rename_key(old, new);
+    } else {
+        println!("No section {}", section);
+    }
+    Ok(())
+}
+
+fn dupe_key(target_ini: &mut IniFile, section: &str, old: &str, new: &str) -> io::Result<()> {
+    if let Some(section) = target_ini.get_section_mut(section) {
+        section.dupe_key(old, new);
     } else {
         println!("No section {}", section);
     }
@@ -146,7 +187,7 @@ fn sort_section(target_ini: &mut IniFile, section: &str) -> io::Result<()> {
 // TODO: Look into using https://github.com/Byron/google-apis-rs/tree/main/gen/translate2 for initial translations.
 
 fn main() {
-    let opt = Opt::from_args();
+    let opt = Args::parse();
 
     // TODO: Grab extra arguments from opt somehow.
     let args: Vec<String> = vec![]; //std::env::args().skip(1).collect();
@@ -206,13 +247,33 @@ fn main() {
             Command::AddNewKey {
                 ref section,
                 ref key,
-            } => add_new_key(&mut target_ini, section, key).unwrap(),
+            } => add_new_key(&mut target_ini, section, key, key).unwrap(),
+            Command::AddNewKeyValue {
+                ref section,
+                ref key,
+                ref value,
+            } => add_new_key(&mut target_ini, section, key, value).unwrap(),
             Command::MoveKey {
                 ref old,
                 ref new,
                 ref key,
             } => {
                 move_key(&mut target_ini, old, new, key).unwrap();
+            }
+            Command::CopyKey {
+                // Copies between sections
+                ref old,
+                ref new,
+                ref key,
+            } => {
+                copy_key(&mut target_ini, old, new, key).unwrap();
+            }
+            Command::DupeKey {
+                ref section,
+                ref old,
+                ref new,
+            } => {
+                dupe_key(&mut target_ini, section, old, new).unwrap();
             }
             Command::RemoveKey {
                 ref section,
@@ -235,7 +296,14 @@ fn main() {
             ref section,
             ref key,
         } => {
-            add_new_key(&mut reference_ini, section, key).unwrap();
+            add_new_key(&mut reference_ini, section, key, key).unwrap();
+        }
+        Command::AddNewKeyValue {
+            ref section,
+            ref key,
+            ref value,
+        } => {
+            add_new_key(&mut reference_ini, section, key, value).unwrap();
         }
         Command::SortSection { ref section } => sort_section(&mut reference_ini, section).unwrap(),
         Command::RenameKey {
@@ -254,6 +322,22 @@ fn main() {
             ref key,
         } => {
             move_key(&mut reference_ini, old, new, key).unwrap();
+        }
+        Command::CopyKey {
+            // between sections
+            ref old,
+            ref new,
+            ref key,
+        } => {
+            copy_key(&mut reference_ini, old, new, key).unwrap();
+        }
+        Command::DupeKey {
+            // Inside a section, preserving a value
+            ref section,
+            ref old,
+            ref new,
+        } => {
+            dupe_key(&mut reference_ini, section, old, new).unwrap();
         }
         Command::RemoveKey {
             ref section,

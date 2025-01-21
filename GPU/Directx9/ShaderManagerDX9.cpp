@@ -61,12 +61,12 @@ PSShader::PSShader(LPDIRECT3DDEVICE9 device, FShaderID id, const char *code) : i
 
 	if (!errorMessage.empty()) {
 		if (success) {
-			ERROR_LOG(G3D, "Warnings in shader compilation!");
+			ERROR_LOG(Log::G3D, "Warnings in shader compilation!");
 		} else {
-			ERROR_LOG(G3D, "Error in shader compilation!");
+			ERROR_LOG(Log::G3D, "Error in shader compilation!");
 		}
-		ERROR_LOG(G3D, "Messages: %s", errorMessage.c_str());
-		ERROR_LOG(G3D, "Shader source:\n%s", LineNumberString(code).c_str());
+		ERROR_LOG(Log::G3D, "Messages: %s", errorMessage.c_str());
+		ERROR_LOG(Log::G3D, "Shader source:\n%s", LineNumberString(code).c_str());
 		OutputDebugStringUTF8("Messages:\n");
 		OutputDebugStringUTF8(errorMessage.c_str());
 		Reporting::ReportMessage("D3D error in shader compilation: info: %s / code: %s", errorMessage.c_str(), code);
@@ -74,18 +74,14 @@ PSShader::PSShader(LPDIRECT3DDEVICE9 device, FShaderID id, const char *code) : i
 
 	if (!success) {
 		failed_ = true;
-		if (shader)
-			shader->Release();
-		shader = NULL;
+		shader = nullptr;
 		return;
 	} else {
-		VERBOSE_LOG(G3D, "Compiled pixel shader:\n%s\n", (const char *)code);
+		VERBOSE_LOG(Log::G3D, "Compiled pixel shader:\n%s\n", (const char *)code);
 	}
 }
 
 PSShader::~PSShader() {
-	if (shader)
-		shader->Release();
 }
 
 std::string PSShader::GetShaderString(DebugShaderStringType type) const {
@@ -110,12 +106,12 @@ VSShader::VSShader(LPDIRECT3DDEVICE9 device, VShaderID id, const char *code, boo
 	success = CompileVertexShaderD3D9(device, code, &shader, &errorMessage);
 	if (!errorMessage.empty()) {
 		if (success) {
-			ERROR_LOG(G3D, "Warnings in shader compilation!");
+			ERROR_LOG(Log::G3D, "Warnings in shader compilation!");
 		} else {
-			ERROR_LOG(G3D, "Error in shader compilation!");
+			ERROR_LOG(Log::G3D, "Error in shader compilation!");
 		}
-		ERROR_LOG(G3D, "Messages: %s", errorMessage.c_str());
-		ERROR_LOG(G3D, "Shader source:\n%s", code);
+		ERROR_LOG(Log::G3D, "Messages: %s", errorMessage.c_str());
+		ERROR_LOG(Log::G3D, "Shader source:\n%s", code);
 		OutputDebugStringUTF8("Messages:\n");
 		OutputDebugStringUTF8(errorMessage.c_str());
 		Reporting::ReportMessage("D3D error in shader compilation: info: %s / code: %s", errorMessage.c_str(), code);
@@ -123,18 +119,14 @@ VSShader::VSShader(LPDIRECT3DDEVICE9 device, VShaderID id, const char *code, boo
 
 	if (!success) {
 		failed_ = true;
-		if (shader)
-			shader->Release();
-		shader = NULL;
+		shader = nullptr;
 		return;
 	} else {
-		VERBOSE_LOG(G3D, "Compiled vertex shader:\n%s\n", (const char *)code);
+		VERBOSE_LOG(Log::G3D, "Compiled vertex shader:\n%s\n", (const char *)code);
 	}
 }
 
 VSShader::~VSShader() {
-	if (shader)
-		shader->Release();
 }
 
 std::string VSShader::GetShaderString(DebugShaderStringType type) const {
@@ -596,9 +588,9 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 		if (!vs || vs->Failed()) {
 			if (!vs) {
 				// TODO: Report this?
-				ERROR_LOG(G3D, "Shader generation failed, falling back to software transform");
+				ERROR_LOG(Log::G3D, "Shader generation failed, falling back to software transform");
 			} else {
-				ERROR_LOG(G3D, "Shader compilation failed, falling back to software transform");
+				ERROR_LOG(Log::G3D, "Shader compilation failed, falling back to software transform");
 			}
 			if (!g_Config.bHideSlowWarnings) {
 				auto gr = GetI18NCategory(I18NCat::GRAPHICS);
@@ -653,8 +645,8 @@ VSShader *ShaderManagerDX9::ApplyShader(bool useHWTransform, bool useHWTessellat
 		gstate_c.CleanUniforms();
 	}
 
-	device_->SetPixelShader(fs->shader);
-	device_->SetVertexShader(vs->shader);
+	device_->SetPixelShader(fs->shader.Get());
+	device_->SetVertexShader(vs->shader.Get());
 
 	lastPShader_ = fs;
 	lastVShader_ = vs;
@@ -666,23 +658,17 @@ std::vector<std::string> ShaderManagerDX9::DebugGetShaderIDs(DebugShaderType typ
 	std::vector<std::string> ids;
 	switch (type) {
 	case SHADER_TYPE_VERTEX:
-	{
-		ids.reserve(vsCache_.size());
 		for (auto iter : vsCache_) {
 			iter.first.ToString(&id);
 			ids.push_back(id);
 		}
-	}
-	break;
+		break;
 	case SHADER_TYPE_FRAGMENT:
-	{
-		ids.reserve(fsCache_.size());
 		for (auto iter : fsCache_) {
 			iter.first.ToString(&id);
 			ids.push_back(id);
 		}
-	}
-	break;
+		break;
 	}
 	return ids;
 }

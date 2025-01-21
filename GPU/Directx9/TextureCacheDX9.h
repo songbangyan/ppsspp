@@ -18,9 +18,10 @@
 #pragma once
 
 #include <d3d9.h>
+#include <wrl/client.h>
 
 #include "GPU/GPU.h"
-#include "GPU/GPUInterface.h"
+#include "GPU/GPUCommon.h"
 #include "GPU/Common/TextureCacheCommon.h"
 
 struct VirtualFramebuffer;
@@ -50,7 +51,7 @@ protected:
 	void Unbind() override;
 	void ReleaseTexture(TexCacheEntry *entry, bool delete_them) override;
 	void BindAsClutTexture(Draw::Texture *tex, bool smooth) override;
-	void *GetNativeTextureView(const TexCacheEntry *entry) override;
+	void *GetNativeTextureView(const TexCacheEntry *entry, bool flat) const override;
 
 private:
 	void ApplySamplingParams(const SamplerCacheKey &key) override;
@@ -60,19 +61,19 @@ private:
 
 	void BuildTexture(TexCacheEntry *const entry) override;
 
-	LPDIRECT3DBASETEXTURE9 &DxTex(const TexCacheEntry *entry) const {
+	static LPDIRECT3DBASETEXTURE9 &DxTex(const TexCacheEntry *entry) {
 		return *(LPDIRECT3DBASETEXTURE9 *)&entry->texturePtr;
 	}
 
-	LPDIRECT3DDEVICE9 device_;
-	LPDIRECT3DDEVICE9EX deviceEx_;
+	Microsoft::WRL::ComPtr<IDirect3DDevice9> device_;
+	Microsoft::WRL::ComPtr<IDirect3DDevice9Ex> deviceEx_;
 
-	LPDIRECT3DVERTEXDECLARATION9 pFramebufferVertexDecl;
+	Microsoft::WRL::ComPtr<IDirect3DVertexDeclaration9> pFramebufferVertexDecl;
 
-	LPDIRECT3DBASETEXTURE9 lastBoundTexture;
+	IDirect3DBaseTexture9 *lastBoundTexture = nullptr;
 	float maxAnisotropyLevel;
 
 	FramebufferManagerDX9 *framebufferManagerDX9_;
 };
 
-D3DFORMAT getClutDestFormat(GEPaletteFormat format);
+static D3DFORMAT getClutDestFormat(GEPaletteFormat format);

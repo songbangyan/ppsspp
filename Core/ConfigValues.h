@@ -83,6 +83,13 @@ enum class GPUBackend {
 	VULKAN = 3,
 };
 
+enum class DepthRasterMode {
+	DEFAULT = 0,
+	LOW_QUALITY = 1,
+	OFF = 2,
+	FORCE_ON = 3,
+};
+
 enum class RestoreSettingsBits : int {
 	SETTINGS = 1,
 	CONTROLS = 2,
@@ -126,6 +133,12 @@ enum class BackgroundAnimation {
 	MOVING_BACKGROUND = 4,
 };
 
+// iOS only
+enum class AppSwitchMode {
+	SINGLE_SWIPE_NO_INDICATOR = 0,
+	DOUBLE_SWIPE_INDICATOR = 1,
+};
+
 // for Config.iShowStatusFlags
 enum class ShowStatusFlags {
 	FPS_COUNTER = 1 << 1,
@@ -151,6 +164,7 @@ enum class ScreenEdgePosition {
 	TOP_RIGHT = 5,
 	CENTER_LEFT = 6,
 	CENTER_RIGHT = 7,
+	CENTER = 8,  // Used for REALLY important messages! Not RetroAchievements notifications.
 	VALUE_COUNT,
 };
 
@@ -163,7 +177,7 @@ enum class DebugOverlay : int {
 	FRAME_PROFILE,
 #endif
 	CONTROL,
-	AUDIO,
+	Audio,
 	GPU_PROFILE,
 	GPU_ALLOCATOR,
 	FRAMEBUFFER_LIST,
@@ -181,4 +195,9 @@ enum class SkipGPUReadbackMode : int {
 	NO_SKIP,
 	SKIP,
 	COPY_TO_TEXTURE,
+};
+
+enum class RemoteISOShareType : int {
+	RECENT,
+	LOCAL_FOLDER,
 };

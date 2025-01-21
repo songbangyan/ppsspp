@@ -1,7 +1,3 @@
-// SDL/EGL implementation of the framework.
-// This is quite messy due to platform-specific implementations and #ifdef's.
-// If your platform is not supported, it is suggested to use Qt instead.
-
 #include <cstdlib>
 #include <unistd.h>
 #include <pwd.h>
@@ -40,6 +36,7 @@ SDLJoystick *joystick = NULL;
 #include "Common/Math/math_util.h"
 #include "Common/GPU/OpenGL/GLRenderManager.h"
 #include "Common/Profiler/Profiler.h"
+#include "Common/Log/LogManager.h"
 
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
 #include <X11/Xlib.h>
@@ -100,6 +97,10 @@ static bool g_rebootEmuThread = false;
 
 static SDL_AudioSpec g_retFmt;
 
+static bool g_textFocusChanged;
+static bool g_textFocus;
+
+
 // Window state to be transferred to the main SDL thread.
 static std::mutex g_mutexWindow;
 struct WindowState {
@@ -152,24 +153,24 @@ static void InitSDLAudioDevice(const std::string &name = "") {
 	if (!startDevice.empty()) {
 		audioDev = SDL_OpenAudioDevice(startDevice.c_str(), 0, &fmt, &g_retFmt, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
 		if (audioDev <= 0) {
-			WARN_LOG(AUDIO, "Failed to open audio device: %s", startDevice.c_str());
+			WARN_LOG(Log::Audio, "Failed to open audio device: %s", startDevice.c_str());
 		}
 	}
 	if (audioDev <= 0) {
-		INFO_LOG(AUDIO, "SDL: Trying a different audio device");
+		INFO_LOG(Log::Audio, "SDL: Trying a different audio device");
 		audioDev = SDL_OpenAudioDevice(nullptr, 0, &fmt, &g_retFmt, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
 	}
 	if (audioDev <= 0) {
-		ERROR_LOG(AUDIO, "Failed to open audio device: %s", SDL_GetError());
+		ERROR_LOG(Log::Audio, "Failed to open audio device: %s", SDL_GetError());
 	} else {
 		if (g_retFmt.samples != fmt.samples) // Notify, but still use it
-			ERROR_LOG(AUDIO, "Output audio samples: %d (requested: %d)", g_retFmt.samples, fmt.samples);
+			ERROR_LOG(Log::Audio, "Output audio samples: %d (requested: %d)", g_retFmt.samples, fmt.samples);
 		if (g_retFmt.format != fmt.format || g_retFmt.channels != fmt.channels) {
-			ERROR_LOG(AUDIO, "Sound buffer format does not match requested format.");
-			ERROR_LOG(AUDIO, "Output audio freq: %d (requested: %d)", g_retFmt.freq, fmt.freq);
-			ERROR_LOG(AUDIO, "Output audio format: %d (requested: %d)", g_retFmt.format, fmt.format);
-			ERROR_LOG(AUDIO, "Output audio channels: %d (requested: %d)", g_retFmt.channels, fmt.channels);
-			ERROR_LOG(AUDIO, "Provided output format does not match requirement, turning audio off");
+			ERROR_LOG(Log::Audio, "Sound buffer format does not match requested format.");
+			ERROR_LOG(Log::Audio, "Output audio freq: %d (requested: %d)", g_retFmt.freq, fmt.freq);
+			ERROR_LOG(Log::Audio, "Output audio format: %d (requested: %d)", g_retFmt.format, fmt.format);
+			ERROR_LOG(Log::Audio, "Output audio channels: %d (requested: %d)", g_retFmt.channels, fmt.channels);
+			ERROR_LOG(Log::Audio, "Provided output format does not match requirement, turning audio off");
 			SDL_CloseAudioDevice(audioDev);
 		}
 		SDL_PauseAudioDevice(audioDev, 0);
@@ -191,7 +192,11 @@ static void UpdateScreenDPI(SDL_Window *window) {
 		SDL_GL_GetDrawableSize(window, &drawable_width, NULL);
 	else if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN)
 		SDL_Vulkan_GetDrawableSize(window, &drawable_width, NULL);
-
+	else {
+		// If we add SDL support for more platforms, we'll end up here.
+		g_DesktopDPI = 1.0f;
+		return;
+	}
 	// Round up a little otherwise there would be a gap sometimes
 	// in fractional scaling
 	g_DesktopDPI = ((float) drawable_width + 1.0f) / window_width;
@@ -206,13 +211,12 @@ static void UpdateScreenDPI(SDL_Window *window) {
 
 // Simple implementations of System functions
 
-
-void System_Toast(const char *text) {
+void System_Toast(std::string_view text) {
 #ifdef _WIN32
 	std::wstring str = ConvertUTF8ToWString(text);
 	MessageBox(0, str.c_str(), L"Toast!", MB_ICONINFORMATION);
 #else
-	puts(text);
+    printf("%*.s", (int)text.length(), text.data());
 #endif
 }
 
@@ -224,7 +228,7 @@ void System_Vibrate(int length_ms) {
 	// Ignore on PC
 }
 
-bool System_MakeRequest(SystemRequestType type, int requestId, const std::string &param1, const std::string &param2, int param3) {
+bool System_MakeRequest(SystemRequestType type, int requestId, const std::string &param1, const std::string &param2, int64_t param3, int64_t param4) {
 	switch (type) {
 	case SystemRequestType::RESTART_APP:
 		g_RestartRequested = true;
@@ -235,7 +239,8 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		g_QuitRequested = true;
 		return true;
 #if PPSSPP_PLATFORM(SWITCH)
-	case SystemRequestType::INPUT_TEXT_MODAL: {
+	case SystemRequestType::INPUT_TEXT_MODAL:
+	{
 		// swkbd only works on "real" titles
 		if (__nx_applet_type != AppletType_Application && __nx_applet_type != AppletType_SystemApplication) {
 			g_requestManager.PostSystemFailure(requestId);
@@ -274,9 +279,8 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 				g_requestManager.PostSystemFailure(requestId);
 			}
 		};
-		DarwinFileSystemServices services;
 		BrowseFileType fileType = (BrowseFileType)param3;
-		services.presentDirectoryPanel(callback, /* allowFiles = */ true, /* allowDirectories = */ false, fileType);
+		DarwinFileSystemServices::presentDirectoryPanel(callback, /* allowFiles = */ true, /* allowDirectories = */ false, fileType);
 		return true;
 	}
 	case SystemRequestType::BROWSE_FOR_FOLDER:
@@ -288,8 +292,7 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 				g_requestManager.PostSystemFailure(requestId);
 			}
 		};
-		DarwinFileSystemServices services;
-		services.presentDirectoryPanel(callback, /* allowFiles = */ false, /* allowDirectories = */ true);
+		DarwinFileSystemServices::presentDirectoryPanel(callback, /* allowFiles = */ false, /* allowDirectories = */ true);
 		return true;
 	}
 #endif
@@ -349,6 +352,23 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 #endif /* PPSSPP_PLATFORM(WINDOWS) */
 		return true;
 	}
+	case SystemRequestType::NOTIFY_UI_EVENT:
+	{
+		switch ((UIEventNotification)param3) {
+		case UIEventNotification::TEXT_GOTFOCUS:
+			g_textFocus = true;
+			g_textFocusChanged = true;
+			break;
+		case UIEventNotification::POPUP_CLOSED:
+		case UIEventNotification::TEXT_LOSTFOCUS:
+			g_textFocus = false;
+			g_textFocusChanged = true;
+			break;
+		default:
+			break;
+		}
+		return true;
+	}
 	default:
 		return false;
 	}
@@ -368,7 +388,7 @@ void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
 		webWifiCreate(&conf, NULL, url, uuid, 0);
 		webWifiShow(&conf, NULL);
 #elif defined(MOBILE_DEVICE)
-		INFO_LOG(SYSTEM, "Would have gone to %s but LaunchBrowser is not implemented on this platform", url);
+		INFO_LOG(Log::System, "Would have gone to %s but LaunchBrowser is not implemented on this platform", url);
 #elif defined(_WIN32)
 		std::wstring wurl = ConvertUTF8ToWString(url);
 		ShellExecute(NULL, L"open", wurl.c_str(), NULL, NULL, SW_SHOWNORMAL);
@@ -378,7 +398,7 @@ void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
 		std::string command = std::string("xdg-open ") + url;
 		int err = system(command.c_str());
 		if (err) {
-			INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", url);
+			INFO_LOG(Log::System, "Would have gone to %s but xdg-utils seems not to be installed", url);
 		}
 #endif
 		break;
@@ -386,7 +406,7 @@ void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
 	case LaunchUrlType::EMAIL_ADDRESS:
 	{
 #if defined(MOBILE_DEVICE)
-		INFO_LOG(SYSTEM, "Would have opened your email client for %s but LaunchEmail is not implemented on this platform", url);
+		INFO_LOG(Log::System, "Would have opened your email client for %s but LaunchEmail is not implemented on this platform", url);
 #elif defined(_WIN32)
 		std::wstring mailto = std::wstring(L"mailto:") + ConvertUTF8ToWString(url);
 		ShellExecute(NULL, L"open", mailto.c_str(), NULL, NULL, SW_SHOWNORMAL);
@@ -397,7 +417,7 @@ void System_LaunchUrl(LaunchUrlType urlType, const char *url) {
 		std::string command = std::string("xdg-email ") + url;
 		int err = system(command.c_str());
 		if (err) {
-			INFO_LOG(SYSTEM, "Would have gone to %s but xdg-utils seems not to be installed", url);
+			INFO_LOG(Log::System, "Would have gone to %s but xdg-utils seems not to be installed", url);
 		}
 #endif
 		break;
@@ -493,7 +513,7 @@ std::vector<std::string> System_GetPropertyStringVec(SystemProperty prop) {
 	}
 }
 
-int System_GetPropertyInt(SystemProperty prop) {
+int64_t System_GetPropertyInt(SystemProperty prop) {
 	switch (prop) {
 	case SYSPROP_AUDIO_SAMPLE_RATE:
 		return g_retFmt.freq;
@@ -546,6 +566,7 @@ float System_GetPropertyFloat(SystemProperty prop) {
 
 bool System_GetPropertyBool(SystemProperty prop) {
 	switch (prop) {
+	case SYSPROP_HAS_TEXT_CLIPBOARD:
 	case SYSPROP_CAN_SHOW_FILE:
 #if PPSSPP_PLATFORM(WINDOWS) || PPSSPP_PLATFORM(MAC) || (PPSSPP_PLATFORM(LINUX) && !PPSSPP_PLATFORM(ANDROID))
 		return true;
@@ -563,9 +584,9 @@ bool System_GetPropertyBool(SystemProperty prop) {
 #if PPSSPP_PLATFORM(SWITCH)
 	case SYSPROP_HAS_TEXT_INPUT_DIALOG:
 		return __nx_applet_type == AppletType_Application || __nx_applet_type != AppletType_SystemApplication;
+#endif
 	case SYSPROP_HAS_KEYBOARD:
 		return true;
-#endif
 	case SYSPROP_APP_GOLD:
 #ifdef GOLD
 		return true;
@@ -666,7 +687,7 @@ static std::thread emuThread;
 static std::atomic<int> emuThreadState((int)EmuThreadState::DISABLED);
 
 static void EmuThreadFunc(GraphicsContext *graphicsContext) {
-	SetCurrentThreadName("Emu");
+	SetCurrentThreadName("EmuThread");
 
 	// There's no real requirement that NativeInit happen on this thread.
 	// We just call the update/render loop here.
@@ -675,17 +696,7 @@ static void EmuThreadFunc(GraphicsContext *graphicsContext) {
 	NativeInitGraphics(graphicsContext);
 
 	while (emuThreadState != (int)EmuThreadState::QUIT_REQUESTED) {
-		double startTime = time_now_d();
-
-		UpdateRunLoop(graphicsContext);
-
-		// Simple throttling to not burn the GPU in the menu.
-		if (GetUIState() != UISTATE_INGAME || !PSP_IsInited()) {
-			double diffTime = time_now_d() - startTime;
-			int sleepTime = (int)(1000.0 / 60.0) - (int)(diffTime * 1000.0);
-			if (sleepTime > 0)
-				sleep_ms(sleepTime);
-		}
+		NativeFrame(graphicsContext);
 	}
 	emuThreadState = (int)EmuThreadState::STOPPED;
 	graphicsContext->StopThread();
@@ -719,7 +730,7 @@ struct InputStateTracker {
 		}
 	}
 
-	bool mouseDown;
+	int mouseDown;  // bitflags
 	bool mouseCaptured;
 };
 
@@ -727,7 +738,7 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 	// We have to juggle around 3 kinds of "DPI spaces" if a logical DPI is
 	// provided (through --dpi, it is equal to system DPI if unspecified):
 	// - SDL gives us motion events in "system DPI" points
-	// - UpdateScreenScale expects pixels, so in a way "96 DPI" points
+	// - Native_UpdateScreenScale expects pixels, so in a way "96 DPI" points
 	// - The UI code expects motion events in "logical DPI" points
 	float mx = event.motion.x * g_DesktopDPI * g_display.dpi_scale_x;
 	float my = event.motion.y * g_DesktopDPI * g_display.dpi_scale_x;
@@ -746,17 +757,17 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 			int new_height = event.window.data2;
 
 			// The size given by SDL is in point-units, convert these to
-			// pixels before passing to UpdateScreenScale()
+			// pixels before passing to Native_UpdateScreenScale()
 			int new_width_px = new_width * g_DesktopDPI;
 			int new_height_px = new_height * g_DesktopDPI;
 
-			Core_NotifyWindowHidden(false);
+			Native_NotifyWindowHidden(false);
 
 			Uint32 window_flags = SDL_GetWindowFlags(window);
 			bool fullscreen = (window_flags & SDL_WINDOW_FULLSCREEN);
 
 			// This one calls NativeResized if the size changed.
-			UpdateScreenScale(new_width_px, new_height_px);
+			Native_UpdateScreenScale(new_width_px, new_height_px);
 
 			// Set variable here in case fullscreen was toggled by hotkey
 			if (g_Config.UseFullScreen() != fullscreen) {
@@ -794,11 +805,11 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 
 		case SDL_WINDOWEVENT_MINIMIZED:
 		case SDL_WINDOWEVENT_HIDDEN:
-			Core_NotifyWindowHidden(true);
+			Native_NotifyWindowHidden(true);
 			break;
 		case SDL_WINDOWEVENT_EXPOSED:
 		case SDL_WINDOWEVENT_SHOWN:
-			Core_NotifyWindowHidden(false);
+			Native_NotifyWindowHidden(false);
 			break;
 		default:
 			break;
@@ -833,7 +844,7 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 				if (ctrl && (k == SDLK_w))
 				{
 					if (Core_IsStepping())
-						Core_EnableStepping(false);
+						Core_Resume();
 					Core_Stop();
 					System_PostUIMessage(UIMessage::REQUEST_GAME_STOP);
 					// NOTE: Unlike Windows version, this
@@ -844,7 +855,7 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 				if (ctrl && (k == SDLK_b))
 				{
 					System_PostUIMessage(UIMessage::REQUEST_GAME_RESET);
-					Core_EnableStepping(false);
+					Core_Resume();
 				}
 			}
 			break;
@@ -867,7 +878,7 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 	case SDL_TEXTINPUT:
 		{
 			int pos = 0;
-			int c = u8_nextchar(event.text.text, &pos);
+			int c = u8_nextchar(event.text.text, &pos, strlen(event.text.text));
 			KeyInput key;
 			key.flags = KEY_CHAR;
 			key.unicodeChar = c;
@@ -933,11 +944,12 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 		switch (event.button.button) {
 		case SDL_BUTTON_LEFT:
 			{
-				inputTracker->mouseDown = true;
+				inputTracker->mouseDown |= 1;
 				TouchInput input{};
 				input.x = mx;
 				input.y = my;
 				input.flags = TOUCH_DOWN | TOUCH_MOUSE;
+				input.buttons = 1;
 				input.id = 0;
 				NativeTouch(input);
 				KeyInput key(DEVICE_ID_MOUSE, NKCODE_EXT_MOUSEBUTTON_1, KEY_DOWN);
@@ -946,6 +958,14 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 			break;
 		case SDL_BUTTON_RIGHT:
 			{
+				inputTracker->mouseDown |= 2;
+				TouchInput input{};
+				input.x = mx;
+				input.y = my;
+				input.flags = TOUCH_DOWN | TOUCH_MOUSE;
+				input.buttons = 2;
+				input.id = 0;
+				NativeTouch(input);
 				KeyInput key(DEVICE_ID_MOUSE, NKCODE_EXT_MOUSEBUTTON_2, KEY_DOWN);
 				NativeKey(key);
 			}
@@ -1000,26 +1020,27 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 			break;
 		}
 	case SDL_MOUSEMOTION:
-		if (inputTracker->mouseDown) {
+		{
 			TouchInput input{};
 			input.x = mx;
 			input.y = my;
 			input.flags = TOUCH_MOVE | TOUCH_MOUSE;
+			input.buttons = inputTracker->mouseDown;
 			input.id = 0;
 			NativeTouch(input);
+			NativeMouseDelta(event.motion.xrel, event.motion.yrel);
+			break;
 		}
-		NativeMouseDelta(event.motion.xrel, event.motion.yrel);
-		break;
 	case SDL_MOUSEBUTTONUP:
 		switch (event.button.button) {
 		case SDL_BUTTON_LEFT:
 			{
-				inputTracker->mouseDown = false;
+				inputTracker->mouseDown &= ~1;
 				TouchInput input{};
 				input.x = mx;
 				input.y = my;
 				input.flags = TOUCH_UP | TOUCH_MOUSE;
-				input.id = 0;
+				input.buttons = 1;
 				NativeTouch(input);
 				KeyInput key(DEVICE_ID_MOUSE, NKCODE_EXT_MOUSEBUTTON_1, KEY_UP);
 				NativeKey(key);
@@ -1027,6 +1048,15 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 			break;
 		case SDL_BUTTON_RIGHT:
 			{
+				inputTracker->mouseDown &= ~2;
+				// Right button only emits mouse move events. This is weird,
+				// but consistent with Windows. Needs cleanup.
+				TouchInput input{};
+				input.x = mx;
+				input.y = my;
+				input.flags = TOUCH_UP | TOUCH_MOUSE;
+				input.buttons = 2;
+				NativeTouch(input);
 				KeyInput key(DEVICE_ID_MOUSE, NKCODE_EXT_MOUSEBUTTON_2, KEY_UP);
 				NativeKey(key);
 			}
@@ -1084,6 +1114,18 @@ static void ProcessSDLEvent(SDL_Window *window, const SDL_Event &event, InputSta
 	}
 }
 
+void UpdateTextFocus() {
+	if (g_textFocusChanged) {
+		INFO_LOG(Log::System, "Updating text focus: %d", g_textFocus);
+		if (g_textFocus) {
+			SDL_StartTextInput();
+		} else {
+			SDL_StopTextInput();
+		}
+		g_textFocusChanged = false;
+	}
+}
+
 void UpdateSDLCursor() {
 #if !defined(MOBILE_DEVICE)
 	if (lastUIState != GetUIState()) {
@@ -1106,6 +1148,10 @@ int main(int argc, char *argv[]) {
 			return 0;
 		}
 	}
+
+	TimeInit();
+
+	g_logManager.EnableOutput(LogOutput::Stdio);
 
 #ifdef HAVE_LIBNX
 	socketInitializeDefault();
@@ -1130,8 +1176,10 @@ int main(int argc, char *argv[]) {
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 #endif
 
+	bool vulkanMayBeAvailable = false;
 	if (VulkanMayBeAvailable()) {
 		printf("DEBUG: Vulkan might be available.\n");
+		vulkanMayBeAvailable = true;
 	} else {
 		printf("DEBUG: Vulkan is not available, not using Vulkan.\n");
 	}
@@ -1314,35 +1362,60 @@ int main(int argc, char *argv[]) {
 			x = g_Config.iWindowX;
 		if (g_Config.iWindowY != -1)
 			y = g_Config.iWindowY;
-		if (g_Config.iWindowWidth > 0)
+		if (g_Config.iWindowWidth > 0 && set_xres <= 0)
 			w = g_Config.iWindowWidth;
-		if (g_Config.iWindowHeight > 0)
+		if (g_Config.iWindowHeight > 0 && set_yres <= 0)
 			h = g_Config.iWindowHeight;
 	}
 
 	GraphicsContext *graphicsContext = nullptr;
 	SDL_Window *window = nullptr;
 
+	// Switch away from Vulkan if not available.
+	if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN && !vulkanMayBeAvailable) {
+		g_Config.iGPUBackend = (int)GPUBackend::OPENGL;
+	}
+
 	std::string error_message;
 	if (g_Config.iGPUBackend == (int)GPUBackend::OPENGL) {
-		SDLGLGraphicsContext *ctx = new SDLGLGraphicsContext();
-		if (ctx->Init(window, x, y, w, h, mode, &error_message) != 0) {
-			printf("GL init error '%s'\n", error_message.c_str());
+		SDLGLGraphicsContext *glctx = new SDLGLGraphicsContext();
+		if (glctx->Init(window, x, y, w, h, mode, &error_message) != 0) {
+			// Let's try the fallback once per process run.
+			printf("GL init error '%s' - falling back to Vulkan\n", error_message.c_str());
+			g_Config.iGPUBackend = (int)GPUBackend::VULKAN;
+			SetGPUBackend((GPUBackend)g_Config.iGPUBackend);
+			delete glctx;
+
+			// NOTE : This should match the lines below in the Vulkan case.
+			SDLVulkanGraphicsContext *vkctx = new SDLVulkanGraphicsContext();
+			if (!vkctx->Init(window, x, y, w, h, mode | SDL_WINDOW_VULKAN, &error_message)) {
+				printf("Vulkan fallback failed: %s\n", error_message.c_str());
+				return 1;
+			}
+			graphicsContext = vkctx;
+		} else {
+			graphicsContext = glctx;
 		}
-		graphicsContext = ctx;
 #if !PPSSPP_PLATFORM(SWITCH)
 	} else if (g_Config.iGPUBackend == (int)GPUBackend::VULKAN) {
-		SDLVulkanGraphicsContext *ctx = new SDLVulkanGraphicsContext();
-		if (!ctx->Init(window, x, y, w, h, mode | SDL_WINDOW_VULKAN, &error_message)) {
+		SDLVulkanGraphicsContext *vkctx = new SDLVulkanGraphicsContext();
+		if (!vkctx->Init(window, x, y, w, h, mode | SDL_WINDOW_VULKAN, &error_message)) {
+			// Let's try the fallback once per process run.
+
 			printf("Vulkan init error '%s' - falling back to GL\n", error_message.c_str());
 			g_Config.iGPUBackend = (int)GPUBackend::OPENGL;
 			SetGPUBackend((GPUBackend)g_Config.iGPUBackend);
-			delete ctx;
+			delete vkctx;
+
+			// NOTE : This should match the three lines above in the OpenGL case.
 			SDLGLGraphicsContext *glctx = new SDLGLGraphicsContext();
-			glctx->Init(window, x, y, w, h, mode, &error_message);
+			if (glctx->Init(window, x, y, w, h, mode, &error_message) != 0) {
+				printf("GL fallback failed: %s\n", error_message.c_str());
+				return 1;
+			}
 			graphicsContext = glctx;
 		} else {
-			graphicsContext = ctx;
+			graphicsContext = vkctx;
 		}
 #endif
 	}
@@ -1356,7 +1429,7 @@ int main(int argc, char *argv[]) {
 
 	float dpi_scale = 1.0f / (g_ForcedDPI == 0.0f ? g_DesktopDPI : g_ForcedDPI);
 
-	UpdateScreenScale(w * g_DesktopDPI, h * g_DesktopDPI);
+	Native_UpdateScreenScale(w * g_DesktopDPI, h * g_DesktopDPI);
 
 	bool mainThreadIsRender = g_Config.iGPUBackend == (int)GPUBackend::OPENGL;
 
@@ -1385,14 +1458,20 @@ int main(int argc, char *argv[]) {
 	// Since we render from the main thread, there's nothing done here, but we call it to avoid confusion.
 	if (!graphicsContext->InitFromRenderThread(&error_message)) {
 		printf("Init from thread error: '%s'\n", error_message.c_str());
+		return 1;
 	}
+
+	// OK, we have a valid graphics backend selected. Let's clear the failures.
+	g_Config.sFailedGPUBackends.clear();
 
 #ifdef MOBILE_DEVICE
 	SDL_ShowCursor(SDL_DISABLE);
 #endif
 
-	// Ensure that the swap interval is set after context creation (needed for kmsdrm)
-	SDL_GL_SetSwapInterval(1);
+	// Avoid the IME popup when holding keys. This doesn't affect all versions of SDL.
+	// Note: We re-enable it in text input fields! This is necessary otherwise we don't receive
+	// KEY_CHAR events.
+	SDL_StopTextInput();
 
 	InitSDLAudioDevice();
 
@@ -1416,16 +1495,28 @@ int main(int argc, char *argv[]) {
 
 	bool waitOnExit = g_Config.iGPUBackend == (int)GPUBackend::OPENGL;
 
+	// Check if the path to a directory containing an unpacked ISO is passed as a command line argument
+	for (int i = 1; i < argc; i++) {
+		if (File::IsDirectory(Path(argv[i]))) {
+			// Display the toast warning
+			System_Toast("Warning: Playing unpacked games may cause issues.");
+			break;
+		}
+	}
+
 	if (!mainThreadIsRender) {
-		// We should only be a message pump
+		// Vulkan mode uses this.
+		// We should only be a message pump. This allows for lower latency
+		// input events, and so on.
 		while (true) {
 			SDL_Event event;
-			while (SDL_PollEvent(&event)) {
+			while (SDL_WaitEventTimeout(&event, 100)) {
 				ProcessSDLEvent(window, event, &inputTracker);
 			}
 			if (g_QuitRequested || g_RestartRequested)
 				break;
 
+			UpdateTextFocus();
 			UpdateSDLCursor();
 
 			inputTracker.MouseCaptureControl();
@@ -1447,16 +1538,17 @@ int main(int argc, char *argv[]) {
 		if (g_QuitRequested || g_RestartRequested)
 			break;
 		if (emuThreadState == (int)EmuThreadState::DISABLED) {
-			UpdateRunLoop(graphicsContext);
+			NativeFrame(graphicsContext);
 		}
 		if (g_QuitRequested || g_RestartRequested)
 			break;
 
+		UpdateTextFocus();
 		UpdateSDLCursor();
 
 		inputTracker.MouseCaptureControl();
 
-		bool renderThreadPaused = Core_IsWindowHidden() && g_Config.bPauseWhenMinimized && emuThreadState != (int)EmuThreadState::DISABLED;
+		bool renderThreadPaused = Native_IsWindowHidden() && g_Config.bPauseWhenMinimized && emuThreadState != (int)EmuThreadState::DISABLED;
 		if (emuThreadState != (int)EmuThreadState::DISABLED && !renderThreadPaused) {
 			if (!graphicsContext->ThreadFrame())
 				break;
@@ -1475,7 +1567,7 @@ int main(int argc, char *argv[]) {
 			EmuThreadStop("shutdown");
 			// Skipping GL calls, the old context is gone.
 			while (graphicsContext->ThreadFrame()) {
-				INFO_LOG(SYSTEM, "graphicsContext->ThreadFrame executed to clear buffers");
+				INFO_LOG(Log::System, "graphicsContext->ThreadFrame executed to clear buffers");
 			}
 			EmuThreadJoin();
 			graphicsContext->ThreadEnd();

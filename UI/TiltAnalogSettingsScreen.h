@@ -37,5 +37,7 @@ private:
 	
 	Lin::Vec3 down_{};
 	JoystickHistoryView *tilt_ = nullptr;
-	GamepadView *gpView_ = nullptr;
 };
+
+extern const char *g_tiltTypes[];
+extern const size_t g_numTiltTypes;

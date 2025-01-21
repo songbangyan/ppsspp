@@ -33,7 +33,7 @@ public:
 	CwCheatScreen(const Path &gamePath);
 	~CwCheatScreen();
 
-	void LoadCheatInfo();
+	bool TryLoadCheatInfo();
 
 	UI::EventReturn OnAddCheat(UI::EventParams &params);
 	UI::EventReturn OnImportCheat(UI::EventParams &params);
@@ -65,5 +65,4 @@ private:
 	std::string gameID_;
 	int fileCheckCounter_ = 0;
 	uint64_t fileCheckHash_ = 0;
-	bool enableAllFlag_ = false;
 };

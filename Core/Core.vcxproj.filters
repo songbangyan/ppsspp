@@ -123,6 +123,9 @@
     <ClCompile Include="MIPS\MIPSVFPUUtils.cpp">
       <Filter>MIPS</Filter>
     </ClCompile>
+    <ClCompile Include="MIPS\MIPSTracer.cpp">
+      <Filter>MIPS</Filter>
+    </ClCompile>
     <ClCompile Include="MIPS\MIPSAnalyst.cpp">
       <Filter>MIPS</Filter>
     </ClCompile>
@@ -517,6 +520,9 @@
     <ClCompile Include="HLE\sceNetAdhoc.cpp">
       <Filter>HLE\Libraries</Filter>
     </ClCompile>
+    <ClCompile Include="HLE\sceNetAdhocMatching.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
     <ClCompile Include="Dialog\PSPGamedataInstallDialog.cpp">
       <Filter>Dialog</Filter>
     </ClCompile>
@@ -578,6 +584,9 @@
       <Filter>Ext\udis86</Filter>
     </ClCompile>
     <ClCompile Include="HLE\sceSha256.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\sceSircs.cpp">
       <Filter>HLE\Libraries</Filter>
     </ClCompile>
     <ClCompile Include="Util\AudioFormat.cpp">
@@ -651,9 +660,6 @@
     </ClCompile>
     <ClCompile Include="FileLoaders\RamCachingFileLoader.cpp">
       <Filter>FileLoaders</Filter>
-    </ClCompile>
-    <ClCompile Include="MIPS\IR\IRAsm.cpp">
-      <Filter>MIPS\IR</Filter>
     </ClCompile>
     <ClCompile Include="MIPS\IR\IRCompALU.cpp">
       <Filter>MIPS\IR</Filter>
@@ -1300,6 +1306,36 @@
     <ClCompile Include="Util\GameDB.cpp">
       <Filter>Util</Filter>
     </ClCompile>
+    <ClCompile Include="Util\MemStick.cpp">
+      <Filter>Util</Filter>
+    </ClCompile>
+    <ClCompile Include="HW\Atrac3Standalone.cpp">
+      <Filter>HW</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\AtracCtx.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\AtracCtx2.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="Dialog\PSPOskConstants.cpp">
+      <Filter>Dialog</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\sceNetApctl.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\sceNetInet.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\sceNetResolver.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\NetInetConstants.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
+    <ClCompile Include="HLE\SocketManager.cpp">
+      <Filter>HLE\Libraries</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ELF\ElfReader.h">
@@ -1330,6 +1366,9 @@
       <Filter>MIPS</Filter>
     </ClInclude>
     <ClInclude Include="MIPS\MIPSVFPUUtils.h">
+      <Filter>MIPS</Filter>
+    </ClInclude>
+    <ClInclude Include="MIPS\MIPSTracer.h">
       <Filter>MIPS</Filter>
     </ClInclude>
     <ClInclude Include="MIPS\MIPSAnalyst.h">
@@ -1704,6 +1743,9 @@
     <ClInclude Include="HLE\sceNetAdhoc.h">
       <Filter>HLE\Libraries</Filter>
     </ClInclude>
+    <ClInclude Include="HLE\sceNetAdhocMatching.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
     <ClInclude Include="Dialog\PSPGamedataInstallDialog.h">
       <Filter>Dialog</Filter>
     </ClInclude>
@@ -1771,6 +1813,9 @@
       <Filter>Ext\udis86</Filter>
     </ClInclude>
     <ClInclude Include="HLE\sceSha256.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\sceSircs.h">
       <Filter>HLE\Libraries</Filter>
     </ClInclude>
     <ClInclude Include="Util\AudioFormat.h">
@@ -2076,6 +2121,36 @@
     <ClInclude Include="Util\GameDB.h">
       <Filter>Util</Filter>
     </ClInclude>
+    <ClInclude Include="Util\MemStick.h">
+      <Filter>Util</Filter>
+    </ClInclude>
+    <ClInclude Include="HW\Atrac3Standalone.h">
+      <Filter>HW</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\AtracCtx.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\AtracCtx2.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="Dialog\PSPOskConstants.h">
+      <Filter>Dialog</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\sceNetApctl.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\sceNetInet.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\sceNetResolver.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\NetInetConstants.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
+    <ClInclude Include="HLE\SocketManager.h">
+      <Filter>HLE\Libraries</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\LICENSE.TXT" />
@@ -2091,6 +2166,7 @@
     <None Include="..\ext\libzip\Android.mk">
       <Filter>Ext\libzip</Filter>
     </None>
+    <None Include="..\assets\infra-dns.json" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="..\ext\sha1\CMakeLists.txt">

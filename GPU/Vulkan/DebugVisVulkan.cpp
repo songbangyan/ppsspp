@@ -23,8 +23,6 @@
 #include "Common/GPU/thin3d.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/UI/Context.h"
-#include "Common/UI/View.h"
-#include "Common/System/Display.h"
 #include "Common/System/System.h"
 
 #include "ext/vma/vk_mem_alloc.h"
@@ -32,9 +30,7 @@
 #include "DebugVisVulkan.h"
 #include "Common/GPU/GPUBackendCommon.h"
 #include "Common/GPU/Vulkan/VulkanMemory.h"
-#include "Common/GPU/Vulkan/VulkanImage.h"
 #include "Common/Data/Text/Parsers.h"
-#include "GPU/Vulkan/GPU_Vulkan.h"
 #include "GPU/Vulkan/VulkanUtil.h"
 #include "GPU/Vulkan/TextureCacheVulkan.h"
 
@@ -46,7 +42,7 @@ bool comparePushBufferNames(const GPUMemoryManager *a, const GPUMemoryManager *b
 	return strcmp(a->Name(), b->Name()) < 0;
 }
 
-void DrawGPUMemoryVis(UIContext *ui, GPUInterface *gpu) {
+void DrawGPUMemoryVis(UIContext *ui, GPUDebugInterface *gpu) {
 	// This one will simply display stats.
 	Draw::DrawContext *draw = ui->GetDrawContext();
 
@@ -92,12 +88,12 @@ void DrawGPUMemoryVis(UIContext *ui, GPUInterface *gpu) {
 	int y = starty;
 
 	ui->SetFontScale(0.7f, 0.7f);
-	ui->DrawTextShadow(str.str().c_str(), x, y, 0xFFFFFFFF, FLAG_DYNAMIC_ASCII);
+	ui->DrawTextShadow(str.str(), x, y, 0xFFFFFFFF, FLAG_DYNAMIC_ASCII);
 	ui->SetFontScale(1.0f, 1.0f);
 	ui->Flush();
 }
 
-void DrawGPUProfilerVis(UIContext *ui, GPUInterface *gpu) {
+void DrawGPUProfilerVis(UIContext *ui, GPUDebugInterface *gpu) {
 	using namespace Draw;
 	const int padding = 10 + System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_LEFT);
 	const int starty = 50 + System_GetPropertyFloat(SYSPROP_DISPLAY_SAFE_INSET_TOP);
@@ -115,7 +111,7 @@ void DrawGPUProfilerVis(UIContext *ui, GPUInterface *gpu) {
 	std::string text = ui->GetDrawContext()->GetGpuProfileString();
 
 	ui->SetFontScale(0.4f, 0.4f);
-	ui->DrawTextShadow(text.c_str(), x, y, 0xFFFFFFFF, FLAG_DYNAMIC_ASCII);
+	ui->DrawTextShadow(text, x, y, 0xFFFFFFFF, FLAG_DYNAMIC_ASCII);
 	ui->SetFontScale(1.0f, 1.0f);
 	ui->Flush();
 }

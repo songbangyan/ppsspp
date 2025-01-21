@@ -61,12 +61,18 @@ enum class ScreenRenderFlags {
 };
 ENUM_CLASS_BITOPS(ScreenRenderFlags);
 
+
+enum class ScreenRenderRole {
+	NONE = 0,
+	CAN_BE_BACKGROUND = 1,
+	MUST_BE_FIRST = 2,
+};
+ENUM_CLASS_BITOPS(ScreenRenderRole);
+
 class Screen {
 public:
 	Screen() : screenManager_(nullptr) { }
-	virtual ~Screen() {
-		screenManager_ = nullptr;
-	}
+	virtual ~Screen();
 
 	virtual void onFinish(DialogResult reason) {}
 	virtual void update() {}
@@ -75,8 +81,8 @@ public:
 	virtual void dialogFinished(const Screen *dialog, DialogResult result) {}
 	virtual void sendMessage(UIMessage message, const char *value) {}
 	virtual void deviceLost() {}
-	virtual void deviceRestored() {}
-	virtual bool canBeBackground(bool isTop) const { return false; }
+	virtual void deviceRestored(Draw::DrawContext *draw) {}
+	virtual ScreenRenderRole renderRole(bool isTop) const { return ScreenRenderRole::NONE; }
 	virtual bool wantBrightBackground() const { return false; }  // special hack for DisplayLayoutScreen.
 
 	virtual void focusChanged(ScreenFocusChange focusChange);
@@ -100,14 +106,19 @@ public:
 
 	virtual TouchInput transformTouch(const TouchInput &touch) { return touch; }
 
+protected:
+	int GetRequesterToken();
+
 private:
 	ScreenManager *screenManager_;
+	int token_ = -1;
+
 	DISALLOW_COPY_AND_ASSIGN(Screen);
 };
 
 class Transition {
 public:
-	Transition() {}
+	Transition() = default;
 };
 
 enum {
@@ -125,9 +136,7 @@ public:
 
 	void setUIContext(UIContext *context) { uiContext_ = context; }
 	UIContext *getUIContext() { return uiContext_; }
-
-	void setDrawContext(Draw::DrawContext *context) { thin3DContext_ = context; }
-	Draw::DrawContext *getDrawContext() { return thin3DContext_; }
+	Draw::DrawContext *getDrawContext() { return draw_; }
 
 	void setPostRenderCallback(PostRenderCallback cb, void *userdata) {
 		postRenderCb_ = cb;
@@ -139,7 +148,7 @@ public:
 	void shutdown();
 
 	void deviceLost();
-	void deviceRestored();
+	void deviceRestored(Draw::DrawContext *draw);
 
 	// Push a dialog box in front. Currently 1-level only.
 	void push(Screen *screen, int layerFlags = 0);
@@ -179,7 +188,7 @@ private:
 	void processFinishDialog();
 
 	UIContext *uiContext_ = nullptr;
-	Draw::DrawContext *thin3DContext_ = nullptr;
+	Draw::DrawContext *draw_ = nullptr;
 
 	PostRenderCallback postRenderCb_ = nullptr;
 	void *postRenderUserdata_ = nullptr;

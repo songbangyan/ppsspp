@@ -18,7 +18,6 @@
 #pragma once
 
 #include <map>
-#include <list>
 #include <memory>
 
 #include "FileSystem.h"
@@ -43,8 +42,8 @@ public:
 	bool     OwnsHandle(u32 handle) override;
 	int      Ioctl(u32 handle, u32 cmd, u32 indataPtr, u32 inlen, u32 outdataPtr, u32 outlen, int &usec) override;
 	PSPDevType DevType(u32 handle) override;
-	FileSystemFlags Flags() override;
-	u64      FreeSpace(const std::string &path) override { return 0; }
+	FileSystemFlags Flags() const override;
+	u64      FreeDiskSpace(const std::string &path) override { return 0; }
 
 	size_t WriteFile(u32 handle, const u8 *pointer, s64 size) override;
 	size_t WriteFile(u32 handle, const u8 *pointer, s64 size, int &usec) override;
@@ -55,6 +54,7 @@ public:
 	bool RemoveFile(const std::string &filename) override { return false; }
 
 	bool ComputeRecursiveDirSizeIfFast(const std::string &path, int64_t *size) override { return false; }
+	void Describe(char *buf, size_t size) const override { snprintf(buf, size, "ISO"); }  // TODO: Ask the fileLoader about the origins
 
 private:
 	struct TreeEntry {
@@ -87,7 +87,7 @@ private:
 		u32 openSize;
 	};
 
-	typedef std::map<u32,OpenFileEntry> EntryMap;
+	typedef std::map<u32, OpenFileEntry> EntryMap;
 	EntryMap entries;
 	IHandleAllocator *hAlloc;
 	TreeEntry *treeroot;
@@ -106,7 +106,7 @@ private:
 // the filenames to "", to achieve this.
 class ISOBlockSystem : public IFileSystem {
 public:
-	ISOBlockSystem(std::shared_ptr<IFileSystem> isoFileSystem) : isoFileSystem_(isoFileSystem) {}
+	ISOBlockSystem(std::shared_ptr<IFileSystem> isoFileSystem) : isoFileSystem_(std::move(isoFileSystem)) {}
 
 	void DoState(PointerWrap &p) override {
 		// This is a bit iffy, as block device savestates already are iffy (loads/saves multiple times for multiple mounts..)
@@ -145,8 +145,8 @@ public:
 	PSPDevType DevType(u32 handle) override {
 		return isoFileSystem_->DevType(handle);
 	}
-	FileSystemFlags Flags() override { return isoFileSystem_->Flags(); }
-	u64      FreeSpace(const std::string &path) override { return isoFileSystem_->FreeSpace(path); }
+	FileSystemFlags Flags() const override { return isoFileSystem_->Flags(); }
+	u64      FreeDiskSpace(const std::string &path) override { return isoFileSystem_->FreeDiskSpace(path); }
 
 	size_t WriteFile(u32 handle, const u8 *pointer, s64 size) override {
 		return isoFileSystem_->WriteFile(handle, pointer, size);
@@ -160,6 +160,8 @@ public:
 	bool RemoveFile(const std::string &filename) override { return false; }
 
 	bool ComputeRecursiveDirSizeIfFast(const std::string &path, int64_t *size) override { return false; }
+
+	void Describe(char *buf, size_t size) const override { snprintf(buf, size, "ISOBlock"); }
 
 private:
 	std::shared_ptr<IFileSystem> isoFileSystem_;

@@ -1,6 +1,6 @@
-#include <algorithm>
-#include <ctype.h>
+#include <cctype>
 #include <set>
+#include <algorithm>  // for sort
 #include <cstdio>
 #include <cstring>
 
@@ -22,7 +22,7 @@ ZipFileReader *ZipFileReader::Create(const Path &zipFile, const char *inZipPath,
 		int fd = File::OpenFD(zipFile, File::OPEN_READ);
 		if (!fd) {
 			if (logErrors) {
-				ERROR_LOG(IO, "Failed to open FD for '%s' as zip file", zipFile.c_str());
+				ERROR_LOG(Log::IO, "Failed to open FD for '%s' as zip file", zipFile.c_str());
 			}
 			return nullptr;
 		}
@@ -33,7 +33,7 @@ ZipFileReader *ZipFileReader::Create(const Path &zipFile, const char *inZipPath,
 
 	if (!zip_file) {
 		if (logErrors) {
-			ERROR_LOG(IO, "Failed to open %s as a zip file", zipFile.c_str());
+			ERROR_LOG(Log::IO, "Failed to open %s as a zip file", zipFile.c_str());
 		}
 		return nullptr;
 	}
@@ -44,7 +44,7 @@ ZipFileReader *ZipFileReader::Create(const Path &zipFile, const char *inZipPath,
 	if (!path.empty() && path.back() != '/') {
 		path.push_back('/');
 	}
-	return new ZipFileReader(zip_file, path);
+	return new ZipFileReader(zip_file, zipFile, path);
 }
 
 ZipFileReader::~ZipFileReader() {
@@ -61,7 +61,7 @@ uint8_t *ZipFileReader::ReadFile(const char *path, size_t *size) {
 	zip_stat(zip_file_, temp_path.c_str(), ZIP_FL_NOCASE | ZIP_FL_UNCHANGED, &zstat);
 	zip_file *file = zip_fopen(zip_file_, temp_path.c_str(), ZIP_FL_NOCASE | ZIP_FL_UNCHANGED);
 	if (!file) {
-		ERROR_LOG(IO, "Error opening %s from ZIP", temp_path.c_str());
+		ERROR_LOG(Log::IO, "Error opening %s from ZIP", temp_path.c_str());
 		return 0;
 	}
 	uint8_t *contents = new uint8_t[zstat.size + 1];
@@ -107,29 +107,28 @@ bool ZipFileReader::GetFileListing(const char *orig_path, std::vector<File::File
 
 	listing->clear();
 
-	INFO_LOG(SYSTEM, "Listing %s", orig_path);
+	// INFO_LOG(Log::System, "Zip: Listing '%s'", orig_path);
+
+	const std::string relativePath = path.substr(inZipPath_.size());
 
 	listing->reserve(directories.size() + files.size());
-	for (auto diter = directories.begin(); diter != directories.end(); ++diter) {
+	for (const auto &dir : directories) {
 		File::FileInfo info;
-		info.name = *diter;
+		info.name = dir;
 
 		// Remove the "inzip" part of the fullname.
-		std::string relativePath = std::string(path).substr(inZipPath_.size());
-		info.fullName = Path(relativePath + *diter);
+		info.fullName = Path(relativePath + dir);
 		info.exists = true;
 		info.isWritable = false;
 		info.isDirectory = true;
-		// INFO_LOG(SYSTEM, "Found file: %s (%s)", info.name.c_str(), info.fullName.c_str());
+		// INFO_LOG(Log::System, "Found file: %s (%s)", info.name.c_str(), info.fullName.c_str());
 		listing->push_back(info);
 	}
 
-	for (auto fiter = files.begin(); fiter != files.end(); ++fiter) {
-		std::string fpath = path;
+	for (const auto &fiter : files) {
 		File::FileInfo info;
-		info.name = *fiter;
-		std::string relativePath = std::string(path).substr(inZipPath_.size());
-		info.fullName = Path(relativePath + *fiter);
+		info.name = fiter;
+		info.fullName = Path(relativePath + fiter);
 		info.exists = true;
 		info.isWritable = false;
 		info.isDirectory = false;
@@ -139,7 +138,7 @@ bool ZipFileReader::GetFileListing(const char *orig_path, std::vector<File::File
 				continue;
 			}
 		}
-		// INFO_LOG(SYSTEM, "Found dir: %s (%s)", info.name.c_str(), info.fullName.c_str());
+		// INFO_LOG(Log::System, "Found dir: %s (%s)", info.name.c_str(), info.fullName.c_str());
 		listing->push_back(info);
 	}
 
@@ -230,8 +229,7 @@ public:
 };
 
 VFSFileReference *ZipFileReader::GetFile(const char *path) {
-	std::lock_guard<std::mutex> guard(lock_);
-	int zi = zip_name_locate(zip_file_, path, ZIP_FL_NOCASE);
+	int zi = zip_name_locate(zip_file_, path, ZIP_FL_NOCASE);  // this is EXPENSIVE
 	if (zi < 0) {
 		// Not found.
 		return nullptr;
@@ -245,7 +243,6 @@ bool ZipFileReader::GetFileInfo(VFSFileReference *vfsReference, File::FileInfo *
 	ZipFileReaderFileReference *reference = (ZipFileReaderFileReference *)vfsReference;
 	// If you crash here, you called this while having the lock held by having the file open.
 	// Don't do that, check the info before you open the file.
-	std::lock_guard<std::mutex> guard(lock_);
 	zip_stat_t zstat;
 	if (zip_stat_index(zip_file_, reference->zi, 0, &zstat) != 0)
 		return false;
@@ -279,8 +276,9 @@ VFSOpenFile *ZipFileReader::OpenFileForRead(VFSFileReference *vfsReference, size
 
 	openFile->zf = zip_fopen_index(zip_file_, reference->zi, 0);
 	if (!openFile->zf) {
-		WARN_LOG(G3D, "File with index %d not found in zip", reference->zi);
+		WARN_LOG(Log::G3D, "File with index %d not found in zip", reference->zi);
 		lock_.unlock();
+		delete openFile;
 		return nullptr;
 	}
 
@@ -290,22 +288,29 @@ VFSOpenFile *ZipFileReader::OpenFileForRead(VFSFileReference *vfsReference, size
 }
 
 void ZipFileReader::Rewind(VFSOpenFile *vfsOpenFile) {
-	ZipFileReaderOpenFile *openFile = (ZipFileReaderOpenFile *)vfsOpenFile;
-	// Close and re-open.
-	zip_fclose(openFile->zf);
-	openFile->zf = zip_fopen_index(zip_file_, openFile->reference->zi, 0);
+	ZipFileReaderOpenFile *file = (ZipFileReaderOpenFile *)vfsOpenFile;
+	_assert_(file);
+	// Unless the zip file is compressed, can't seek directly, so we re-open.
+	// This version of libzip doesn't even have zip_file_is_seekable(), should probably upgrade.
+	zip_fclose(file->zf);
+	file->zf = zip_fopen_index(zip_file_, file->reference->zi, 0);
+	_dbg_assert_(file->zf != nullptr);
 }
 
 size_t ZipFileReader::Read(VFSOpenFile *vfsOpenFile, void *buffer, size_t length) {
 	ZipFileReaderOpenFile *file = (ZipFileReaderOpenFile *)vfsOpenFile;
+	_assert_(file);
+	_dbg_assert_(file->zf != nullptr);
 	return zip_fread(file->zf, buffer, length);
 }
 
 void ZipFileReader::CloseFile(VFSOpenFile *vfsOpenFile) {
 	ZipFileReaderOpenFile *file = (ZipFileReaderOpenFile *)vfsOpenFile;
+	_assert_(file);
 	_dbg_assert_(file->zf != nullptr);
 	zip_fclose(file->zf);
 	file->zf = nullptr;
+	vfsOpenFile = nullptr;
 	lock_.unlock();
 	delete file;
 }

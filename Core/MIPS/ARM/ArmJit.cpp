@@ -63,22 +63,22 @@ void DisassembleArm(const u8 *data, int size) {
 			int reg1 = (next & 0x0000F000) >> 12;
 			if (reg0 == reg1) {
 				snprintf(temp, sizeof(temp), "%08x MOV32 %s, %04x%04x", (u32)inst, ArmRegName(reg0), hi, low);
-				INFO_LOG(JIT, "A:   %s", temp);
+				INFO_LOG(Log::JIT, "A:   %s", temp);
 				i += 4;
 				continue;
 			}
 		}
 		ArmDis((u32)codePtr, inst, temp, sizeof(temp), true);
-		INFO_LOG(JIT, "A:   %s", temp);
+		INFO_LOG(Log::JIT, "A:   %s", temp);
 	}
 }
 
 static u32 JitBreakpoint(uint32_t addr) {
 	// Should we skip this breakpoint?
-	if (CBreakPoints::CheckSkipFirst() == currentMIPS->pc || CBreakPoints::CheckSkipFirst() == addr)
+	if (g_breakpoints.CheckSkipFirst() == currentMIPS->pc || g_breakpoints.CheckSkipFirst() == addr)
 		return 0;
 
-	BreakAction result = CBreakPoints::ExecBreakPoint(addr);
+	BreakAction result = g_breakpoints.ExecBreakPoint(addr);
 	if ((result & BREAK_ACTION_PAUSE) == 0)
 		return 0;
 
@@ -86,7 +86,7 @@ static u32 JitBreakpoint(uint32_t addr) {
 }
 
 static u32 JitMemCheck(u32 pc) {
-	if (CBreakPoints::CheckSkipFirst() == currentMIPS->pc)
+	if (g_breakpoints.CheckSkipFirst() == currentMIPS->pc)
 		return 0;
 
 	// Note: pc may be the delay slot.
@@ -96,8 +96,8 @@ static u32 JitMemCheck(u32 pc) {
 		offset &= 0xFFFC;
 	u32 addr = currentMIPS->r[MIPS_GET_RS(op)] + offset;
 
-	CBreakPoints::ExecOpMemCheck(addr, pc);
-	return coreState == CORE_RUNNING || coreState == CORE_NEXTFRAME ? 0 : 1;
+	g_breakpoints.ExecOpMemCheck(addr, pc);
+	return coreState == CORE_RUNNING_CPU || coreState == CORE_NEXTFRAME ? 0 : 1;
 }
 
 namespace MIPSComp
@@ -114,13 +114,13 @@ ArmJit::ArmJit(MIPSState *mipsState) : blocks(mipsState, this), gpr(mipsState, &
 	AllocCodeSpace(1024 * 1024 * 16);  // 32MB is the absolute max because that's what an ARM branch instruction can reach, backwards and forwards.
 	GenerateFixedCode();
 
-	INFO_LOG(JIT, "ARM JIT initialized: %lld MB of code space", (long long)(GetSpaceLeft() / (1024 * 1024)));
+	INFO_LOG(Log::JIT, "ARM JIT initialized: %lld MB of code space", (long long)(GetSpaceLeft() / (1024 * 1024)));
 
 	js.startDefaultPrefix = mips_->HasDefaultPrefix();
 
 	// The debugger sets this so that "go" on a breakpoint will actually... go.
 	// But if they reset, we can end up hitting it by mistake, since it's based on PC and ticks.
-	CBreakPoints::SetSkipFirst(0);
+	g_breakpoints.SetSkipFirst(0);
 }
 
 ArmJit::~ArmJit() {
@@ -133,7 +133,7 @@ void ArmJit::DoState(PointerWrap &p)
 		return;
 
 	if (p.mode == PointerWrap::MODE_READ && !js.startDefaultPrefix) {
-		WARN_LOG(CPU, "Jit: An uneaten prefix was previously detected. Jitting in unknown-prefix mode.");
+		WARN_LOG(Log::CPU, "Jit: An uneaten prefix was previously detected. Jitting in unknown-prefix mode.");
 	}
 	Do(p, js.startDefaultPrefix);
 	if (s >= 2) {
@@ -147,7 +147,7 @@ void ArmJit::DoState(PointerWrap &p)
 
 	// The debugger sets this so that "go" on a breakpoint will actually... go.
 	// But if they reset, we can end up hitting it by mistake, since it's based on PC and ticks.
-	CBreakPoints::SetSkipFirst(0);
+	g_breakpoints.SetSkipFirst(0);
 }
 
 void ArmJit::UpdateFCR31() {
@@ -208,10 +208,10 @@ void ArmJit::InvalidateCacheAt(u32 em_address, int length) {
 void ArmJit::EatInstruction(MIPSOpcode op) {
 	MIPSInfo info = MIPSGetInfo(op);
 	if (info & DELAYSLOT) {
-		ERROR_LOG_REPORT_ONCE(ateDelaySlot, JIT, "Ate a branch op.");
+		ERROR_LOG_REPORT_ONCE(ateDelaySlot, Log::JIT, "Ate a branch op.");
 	}
 	if (js.inDelaySlot) {
-		ERROR_LOG_REPORT_ONCE(ateInDelaySlot, JIT, "Ate an instruction inside a delay slot.");
+		ERROR_LOG_REPORT_ONCE(ateInDelaySlot, Log::JIT, "Ate an instruction inside a delay slot.");
 	}
 
 	CheckJitBreakpoint(GetCompilerPC() + 4, 0);
@@ -244,7 +244,7 @@ void ArmJit::CompileDelaySlot(int flags) {
 void ArmJit::Compile(u32 em_address) {
 	PROFILE_THIS_SCOPE("jitc");
 
-	// INFO_LOG(JIT, "Compiling at %08x", em_address);
+	// INFO_LOG(Log::JIT, "Compiling at %08x", em_address);
 
 	if (GetSpaceLeft() < 0x10000 || blocks.IsFull()) {
 		ClearCache();
@@ -263,7 +263,7 @@ void ArmJit::Compile(u32 em_address) {
 	bool cleanSlate = false;
 
 	if (js.hasSetRounding && !js.lastSetRounding) {
-		WARN_LOG(JIT, "Detected rounding mode usage, rebuilding jit with checks");
+		WARN_LOG(Log::JIT, "Detected rounding mode usage, rebuilding jit with checks");
 		// Won't loop, since hasSetRounding is only ever set to 1.
 		js.lastSetRounding = js.hasSetRounding;
 		cleanSlate = true;
@@ -271,7 +271,7 @@ void ArmJit::Compile(u32 em_address) {
 
 	// Drat.  The VFPU hit an uneaten prefix at the end of a block.
 	if (js.startDefaultPrefix && js.MayHavePrefix()) {
-		WARN_LOG_REPORT(JIT, "An uneaten prefix at end of block: %08x", GetCompilerPC() - 4);
+		WARN_LOG_REPORT(Log::JIT, "An uneaten prefix at end of block: %08x", GetCompilerPC() - 4);
 		js.LogPrefix();
 
 		// Let's try that one more time.  We won't get back here because we toggled the value.
@@ -398,17 +398,17 @@ const u8 *ArmJit::DoJit(u32 em_address, JitBlock *b)
 
 	char temp[256];
 	if (logBlocks > 0 && dontLogBlocks == 0) {
-		INFO_LOG(JIT, "=============== mips ===============");
+		INFO_LOG(Log::JIT, "=============== mips ===============");
 		for (u32 cpc = em_address; cpc != GetCompilerPC() + 4; cpc += 4) {
 			MIPSDisAsm(Memory::Read_Opcode_JIT(cpc), cpc, temp, sizeof(temp), true);
-			INFO_LOG(JIT, "M: %08x   %s", cpc, temp);
+			INFO_LOG(Log::JIT, "M: %08x   %s", cpc, temp);
 		}
 	}
 
 	b->codeSize = GetCodePtr() - b->normalEntry;
 
 	if (logBlocks > 0 && dontLogBlocks == 0) {
-		INFO_LOG(JIT, "=============== ARM ===============");
+		INFO_LOG(Log::JIT, "=============== ARM ===============");
 		DisassembleArm(b->normalEntry, GetCodePtr() - b->normalEntry);
 	}
 	if (logBlocks > 0)
@@ -449,7 +449,7 @@ bool ArmJit::DescribeCodePtr(const u8 *ptr, std::string &name)
 void ArmJit::Comp_RunBlock(MIPSOpcode op)
 {
 	// This shouldn't be necessary, the dispatcher should catch us before we get here.
-	ERROR_LOG(JIT, "Comp_RunBlock should never be reached!");
+	ERROR_LOG(Log::JIT, "Comp_RunBlock should never be reached!");
 }
 
 void ArmJit::LinkBlock(u8 *exitPoint, const u8 *checkedEntry) {
@@ -536,7 +536,7 @@ bool ArmJit::ReplaceJalTo(u32 dest) {
 	js.compilerPC += 4;
 	// No writing exits, keep going!
 
-	if (CBreakPoints::HasMemChecks()) {
+	if (g_breakpoints.HasMemChecks()) {
 		// We could modify coreState, so we need to write PC and check.
 		// Otherwise, PC may end up on the jal.  We add 4 to skip the delay slot.
 		FlushAll();
@@ -561,7 +561,7 @@ void ArmJit::Comp_ReplacementFunc(MIPSOpcode op)
 
 	const ReplacementTableEntry *entry = GetReplacementFunc(index);
 	if (!entry) {
-		ERROR_LOG_REPORT_ONCE(replFunc, HLE, "Invalid replacement op %08x at %08x", op.encoding, js.compilerPC);
+		ERROR_LOG_REPORT_ONCE(replFunc, Log::HLE, "Invalid replacement op %08x at %08x", op.encoding, js.compilerPC);
 		return;
 	}
 
@@ -572,7 +572,7 @@ void ArmJit::Comp_ReplacementFunc(MIPSOpcode op)
 		if ((entry->flags & (REPFLAG_HOOKENTER | REPFLAG_HOOKEXIT)) == 0) {
 			// Any breakpoint at the func entry was already tripped, so we can still run the replacement.
 			// That's a common case - just to see how often the replacement hits.
-			disabled = CBreakPoints::RangeContainsBreakPoint(GetCompilerPC() + sizeof(u32), funcSize - sizeof(u32));
+			disabled = g_breakpoints.RangeContainsBreakPoint(GetCompilerPC() + sizeof(u32), funcSize - sizeof(u32));
 		}
 	}
 
@@ -634,7 +634,7 @@ void ArmJit::Comp_ReplacementFunc(MIPSOpcode op)
 			js.compiling = false;
 		}
 	} else {
-		ERROR_LOG(HLE, "Replacement function %s has neither jit nor regular impl", entry->name);
+		ERROR_LOG(Log::HLE, "Replacement function %s has neither jit nor regular impl", entry->name);
 	}
 }
 
@@ -793,7 +793,7 @@ void ArmJit::WriteSyscallExit()
 }
 
 bool ArmJit::CheckJitBreakpoint(u32 addr, int downcountOffset) {
-	if (CBreakPoints::IsAddressBreakPoint(addr)) {
+	if (g_breakpoints.IsAddressBreakPoint(addr)) {
 		MRS(R8);
 		FlushAll();
 		MOVI2R(SCRATCHREG1, GetCompilerPC());
@@ -821,7 +821,7 @@ bool ArmJit::CheckJitBreakpoint(u32 addr, int downcountOffset) {
 }
 
 bool ArmJit::CheckMemoryBreakpoint(int instructionOffset) {
-	if (CBreakPoints::HasMemChecks()) {
+	if (g_breakpoints.HasMemChecks()) {
 		int off = instructionOffset + (js.inDelaySlot ? 1 : 0);
 
 		MRS(R8);

@@ -3,6 +3,7 @@
 #include "Common/Data/Encoding/Utf8.h"
 #include "Common/Math/expression_parser.h"
 
+#include "Core/Debugger/Breakpoints.h"
 #include "BreakpointWindow.h"
 #include "../resource.h"
 
@@ -134,14 +135,14 @@ bool BreakpointWindow::fetchDialogData(HWND hwnd)
 
 	// parse address
 	GetWindowTextA(GetDlgItem(hwnd, IDC_BREAKPOINT_ADDRESS), str, 256);
-	if (cpu->initExpression(str, exp) == false)
+	if (initExpression(cpu, str, exp) == false)
 	{
 		snprintf(errorMessage, sizeof(errorMessage), "Invalid expression \"%s\": %s", str, getExpressionError());
 		MessageBoxA(hwnd, errorMessage, "Error", MB_OK);
 		return false;
 	}
 
-	if (cpu->parseExpression(exp, address) == false)
+	if (parseExpression(cpu, exp, address) == false)
 	{
 		snprintf(errorMessage, sizeof(errorMessage), "Invalid expression \"%s\": %s", str, getExpressionError());
 		MessageBoxA(hwnd, errorMessage, "Error", MB_OK);
@@ -152,14 +153,14 @@ bool BreakpointWindow::fetchDialogData(HWND hwnd)
 	{
 		// parse size
 		GetWindowTextA(GetDlgItem(hwnd, IDC_BREAKPOINT_SIZE), str, 256);
-		if (cpu->initExpression(str, exp) == false)
+		if (initExpression(cpu, str, exp) == false)
 		{
 			snprintf(errorMessage, sizeof(errorMessage), "Invalid expression \"%s\": %s", str, getExpressionError());
 			MessageBoxA(hwnd, errorMessage, "Error", MB_OK);
 			return false;
 		}
 
-		if (cpu->parseExpression(exp, size) == false)
+		if (parseExpression(cpu, exp, size) == false)
 		{
 			snprintf(errorMessage, sizeof(errorMessage), "Invalid expression \"%s\": %s", str, getExpressionError());
 			MessageBoxA(hwnd, errorMessage, "Error", MB_OK);
@@ -174,7 +175,7 @@ bool BreakpointWindow::fetchDialogData(HWND hwnd)
 	compiledCondition.clear();
 	if (!condition.empty())
 	{
-		if (cpu->initExpression(condition.c_str(), compiledCondition) == false)
+		if (initExpression(cpu, condition.c_str(), compiledCondition) == false)
 		{
 			snprintf(errorMessage, sizeof(errorMessage), "Invalid expression \"%s\": %s", condition.c_str(), getExpressionError());
 			MessageBoxA(hwnd, errorMessage, "Error", MB_OK);
@@ -185,7 +186,7 @@ bool BreakpointWindow::fetchDialogData(HWND hwnd)
 	wchar_t tempLogFormat[512];
 	GetWindowTextW(GetDlgItem(hwnd, IDC_BREAKPOINT_LOG_FORMAT), tempLogFormat, 512);
 	logFormat = ConvertWStringToUTF8(tempLogFormat);
-	if (!CBreakPoints::ValidateLogFormat(cpu, logFormat)) {
+	if (!g_breakpoints.ValidateLogFormat(cpu, logFormat)) {
 		snprintf(errorMessage, sizeof(errorMessage), "Invalid log format (example: \"{a1}\").");
 		MessageBoxA(hwnd, errorMessage, "Error", MB_OK);
 		return false;
@@ -219,32 +220,32 @@ void BreakpointWindow::addBreakpoint() {
 		if (onChange)
 			cond |= MEMCHECK_WRITE_ONCHANGE;
 
-		CBreakPoints::AddMemCheck(address, address + size, (MemCheckCondition)cond, result);
+		g_breakpoints.AddMemCheck(address, address + size, (MemCheckCondition)cond, result);
 
 		if (!condition.empty()) {
 			BreakPointCond cond;
 			cond.debug = cpu;
 			cond.expressionString = condition;
 			cond.expression = compiledCondition;
-			CBreakPoints::ChangeMemCheckAddCond(address, address + size, cond);
+			g_breakpoints.ChangeMemCheckAddCond(address, address + size, cond);
 		}
 
-		CBreakPoints::ChangeMemCheckLogFormat(address, address + size, logFormat);
+		g_breakpoints.ChangeMemCheckLogFormat(address, address + size, logFormat);
 	}
 	else {
 		// add breakpoint
-		CBreakPoints::AddBreakPoint(address, false);
+		g_breakpoints.AddBreakPoint(address, false);
 
 		if (!condition.empty()) {
 			BreakPointCond cond;
 			cond.debug = cpu;
 			cond.expressionString = condition;
 			cond.expression = compiledCondition;
-			CBreakPoints::ChangeBreakPointAddCond(address, cond);
+			g_breakpoints.ChangeBreakPointAddCond(address, cond);
 		}
 
-		CBreakPoints::ChangeBreakPoint(address, result);
-		CBreakPoints::ChangeBreakPointLogFormat(address, logFormat);
+		g_breakpoints.ChangeBreakPoint(address, result);
+		g_breakpoints.ChangeBreakPointLogFormat(address, logFormat);
 	}
 }
 

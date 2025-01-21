@@ -28,7 +28,6 @@
 #include "Common/GPU/thin3d.h"
 #include "Common/GPU/Vulkan/VulkanRenderManager.h"
 #include "Common/System/OSD.h"
-#include "Common/Data/Convert/ColorConv.h"
 #include "Common/StringUtils.h"
 #include "Common/TimeUtil.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
@@ -36,8 +35,6 @@
 #include "Common/GPU/Vulkan/VulkanMemory.h"
 
 #include "Core/Config.h"
-#include "Core/MemMap.h"
-#include "Core/System.h"
 
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
@@ -136,6 +133,7 @@ VkSampler SamplerCache::GetOrCreateSampler(const SamplerCacheKey &key) {
 	samp.magFilter = key.magFilt ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
 	samp.minFilter = key.minFilt ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
 	samp.mipmapMode = key.mipFilt ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+
 	if (key.aniso) {
 		// Docs say the min of this value and the supported max are used.
 		samp.maxAnisotropy = 1 << g_Config.iAnisotropyLevel;
@@ -187,7 +185,6 @@ void SamplerCache::DeviceRestore(VulkanContext *vulkan) {
 
 std::vector<std::string> SamplerCache::DebugGetSamplerIDs() const {
 	std::vector<std::string> ids;
-	ids.reserve(cache_.size());
 	cache_.Iterate([&](const SamplerCacheKey &id, VkSampler sampler) {
 		std::string idstr;
 		id.ToString(&idstr);
@@ -229,6 +226,7 @@ void TextureCacheVulkan::DeviceLost() {
 
 	nextTexture_ = nullptr;
 	draw_ = nullptr;
+	Unbind();
 }
 
 void TextureCacheVulkan::DeviceRestore(Draw::DrawContext *draw) {
@@ -372,8 +370,7 @@ void TextureCacheVulkan::UpdateCurrentClut(GEPaletteFormat clutFormat, u32 clutB
 
 void TextureCacheVulkan::BindTexture(TexCacheEntry *entry) {
 	if (!entry || !entry->vkTex) {
-		imageView_ = VK_NULL_HANDLE;
-		curSampler_ = VK_NULL_HANDLE;
+		Unbind();
 		return;
 	}
 
@@ -486,7 +483,7 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 		if (uploadCS_ != VK_NULL_HANDLE) {
 			computeUpload = true;
 		} else {
-			WARN_LOG(G3D, "Falling back to software scaling, hardware shader didn't compile");
+			WARN_LOG(Log::G3D, "Falling back to software scaling, hardware shader didn't compile");
 		}
 	}
 
@@ -496,6 +493,7 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 	}
 
 	if (plan.saveTexture) {
+		INFO_LOG(Log::G3D, "About to save texture (%dx%d)", plan.createW, plan.createH);
 		actualFmt = VULKAN_8888_FORMAT;
 	}
 
@@ -511,9 +509,12 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 	snprintf(texName, sizeof(texName), "tex_%08x_%s_%s", entry->addr, GeTextureFormatToString((GETextureFormat)entry->format, gstate.getClutPaletteFormat()), gstate.isTextureSwizzled() ? "swz" : "lin");
 	entry->vkTex = new VulkanTexture(vulkan, texName);
 	VulkanTexture *image = entry->vkTex;
-	bool allocSuccess = image->CreateDirect(cmdInit, plan.createW, plan.createH, plan.depth, plan.levelsToCreate, actualFmt, imageLayout, usage, mapping);
+
+	VulkanBarrierBatch barrier;
+	bool allocSuccess = image->CreateDirect(plan.createW, plan.createH, plan.depth, plan.levelsToCreate, actualFmt, imageLayout, usage, &barrier, mapping);
+	barrier.Flush(cmdInit);
 	if (!allocSuccess && !lowMemoryMode_) {
-		WARN_LOG_REPORT(G3D, "Texture cache ran out of GPU memory; switching to low memory mode");
+		WARN_LOG_REPORT(Log::G3D, "Texture cache ran out of GPU memory; switching to low memory mode");
 		lowMemoryMode_ = true;
 		decimationCounter_ = 0;
 		Decimate(entry, true);
@@ -536,11 +537,12 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 		plan.scaleFactor = 1;
 		actualFmt = dstFmt;
 
-		allocSuccess = image->CreateDirect(cmdInit, plan.createW, plan.createH, plan.depth, plan.levelsToCreate, actualFmt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, mapping);
+		allocSuccess = image->CreateDirect(plan.createW, plan.createH, plan.depth, plan.levelsToCreate, actualFmt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, &barrier, mapping);
+		barrier.Flush(cmdInit);
 	}
 
 	if (!allocSuccess) {
-		ERROR_LOG(G3D, "Failed to create texture (%dx%d)", plan.w, plan.h);
+		ERROR_LOG(Log::G3D, "Failed to create texture (%dx%d)", plan.w, plan.h);
 		delete entry->vkTex;
 		entry->vkTex = nullptr;
 	}
@@ -612,7 +614,7 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 			data = pushBuffer->Allocate(uploadSize, pushAlignment, &texBuf, &bufferOffset);
 			double replaceStart = time_now_d();
 			if (!plan.replaced->CopyLevelTo(plan.baseLevelSrc + i, (uint8_t *)data, uploadSize, byteStride)) {  // If plan.doReplace, this shouldn't fail.
-				WARN_LOG(G3D, "Failed to copy replaced texture level");
+				WARN_LOG(Log::G3D, "Failed to copy replaced texture level");
 				// TODO: Fill with some pattern?
 			}
 			replacementTimeThisFrame_ += time_now_d() - replaceStart;
@@ -696,7 +698,7 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 	}
 }
 
-VkFormat TextureCacheVulkan::GetDestFormat(GETextureFormat format, GEPaletteFormat clutFormat) const {
+VkFormat TextureCacheVulkan::GetDestFormat(GETextureFormat format, GEPaletteFormat clutFormat) {
 	if (!gstate_c.Use(GPU_USE_16BIT_FORMATS)) {
 		return VK_FORMAT_R8G8B8A8_UNORM;
 	}
@@ -761,8 +763,11 @@ void TextureCacheVulkan::LoadVulkanTextureLevel(TexCacheEntry &entry, uint8_t *w
 	if (scaleFactor > 1) {
 		u32 fmt = dstFmt;
 		// CPU scaling reads from the destination buffer so we want cached RAM.
-		uint8_t *rearrange = (uint8_t *)AllocateAlignedMemory(w * scaleFactor * h * scaleFactor * 4, 16);
-		scaler_.ScaleAlways((u32 *)rearrange, pixelData, w, h, &w, &h, scaleFactor);
+		size_t allocBytes = w * scaleFactor * h * scaleFactor * 4;
+		uint8_t *scaleBuf = (uint8_t *)AllocateAlignedMemory(allocBytes, 16);
+		_assert_msg_(scaleBuf, "Failed to allocate %d aligned bytes for texture scaler", (int)allocBytes);
+
+		scaler_.ScaleAlways((u32 *)scaleBuf, pixelData, w, h, &w, &h, scaleFactor);
 		pixelData = (u32 *)writePtr;
 
 		// We always end up at 8888.  Other parts assume this.
@@ -772,13 +777,13 @@ void TextureCacheVulkan::LoadVulkanTextureLevel(TexCacheEntry &entry, uint8_t *w
 
 		if (decPitch != rowPitch) {
 			for (int y = 0; y < h; ++y) {
-				memcpy(writePtr + rowPitch * y, rearrange + decPitch * y, w * bpp);
+				memcpy(writePtr + rowPitch * y, scaleBuf + decPitch * y, w * bpp);
 			}
 			decPitch = rowPitch;
 		} else {
-			memcpy(writePtr, rearrange, w * h * 4);
+			memcpy(writePtr, scaleBuf, w * h * 4);
 		}
-		FreeAlignedMemory(rearrange);
+		FreeAlignedMemory(scaleBuf);
 	}
 }
 
@@ -857,7 +862,7 @@ std::string TextureCacheVulkan::DebugGetSamplerString(const std::string &id, Deb
 	return samplerCache_.DebugGetSamplerString(id, stringType);
 }
 
-void *TextureCacheVulkan::GetNativeTextureView(const TexCacheEntry *entry) {
-	VkImageView view = entry->vkTex->GetImageArrayView();
+void *TextureCacheVulkan::GetNativeTextureView(const TexCacheEntry *entry, bool flat) const {
+	VkImageView view = flat ? entry->vkTex->GetImageView() : entry->vkTex->GetImageArrayView();
 	return (void *)view;
 }

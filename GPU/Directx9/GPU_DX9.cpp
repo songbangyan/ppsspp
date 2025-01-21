@@ -22,18 +22,11 @@
 #include "Common/System/OSD.h"
 #include "Common/Profiler/Profiler.h"
 #include "Common/Data/Text/I18n.h"
-#include "Core/Debugger/Breakpoints.h"
-#include "Core/MemMapHelpers.h"
-#include "Core/MIPS/MIPS.h"
 #include "Core/Config.h"
-#include "Core/ConfigValues.h"
-#include "Core/System.h"
 
 #include "Common/GPU/D3D9/D3D9StateCache.h"
 
 #include "GPU/GPUState.h"
-#include "GPU/ge_constants.h"
-#include "GPU/GeDisasm.h"
 
 #include "GPU/Common/FramebufferManagerCommon.h"
 #include "GPU/Directx9/ShaderManagerDX9.h"
@@ -56,6 +49,7 @@ GPU_DX9::GPU_DX9(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 	drawEngineCommon_ = &drawEngine_;
 	shaderManager_ = shaderManagerDX9_;
 
+	drawEngine_.SetGPUCommon(this);
 	drawEngine_.SetShaderManager(shaderManagerDX9_);
 	drawEngine_.SetTextureCache(textureCacheDX9_);
 	drawEngine_.SetFramebufferManager(framebufferManagerDX9_);
@@ -69,7 +63,7 @@ GPU_DX9::GPU_DX9(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 
 	// Sanity check gstate
 	if ((int *)&gstate.transferstart - (int *)&gstate != 0xEA) {
-		ERROR_LOG(G3D, "gstate has drifted out of sync!");
+		ERROR_LOG(Log::G3D, "gstate has drifted out of sync!");
 	}
 
 	// No need to flush before the tex scale/offset commands if we are baking
@@ -86,7 +80,7 @@ GPU_DX9::GPU_DX9(GraphicsContext *gfxCtx, Draw::DrawContext *draw)
 
 	if (g_Config.bHardwareTessellation) {
 		// Disable hardware tessellation bacause DX9 is still unsupported.
-		ERROR_LOG(G3D, "Hardware Tessellation is unsupported, falling back to software tessellation");
+		ERROR_LOG(Log::G3D, "Hardware Tessellation is unsupported, falling back to software tessellation");
 		auto gr = GetI18NCategory(I18NCat::GRAPHICS);
 		// TODO: Badly formulated
 		g_OSD.Show(OSDType::MESSAGE_WARNING, gr->T("Turn off Hardware Tessellation - unsupported"));
@@ -131,7 +125,7 @@ void GPU_DX9::BeginHostFrame() {
 	if (gstate_c.useFlagsChanged) {
 		// TODO: It'd be better to recompile them in the background, probably?
 		// This most likely means that saw equal depth changed.
-		WARN_LOG(G3D, "Shader use flags changed, clearing all shaders and depth buffers");
+		WARN_LOG(Log::G3D, "Shader use flags changed, clearing all shaders and depth buffers");
 		shaderManager_->ClearShaders();
 		framebufferManager_->ClearAllDepthBuffers();
 		gstate_c.useFlagsChanged = false;

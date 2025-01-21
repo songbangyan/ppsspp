@@ -4,7 +4,6 @@
 // Only draws and binds are handled here, resource creation and allocations are handled as normal -
 // that's the nice thing with Vulkan.
 
-#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -16,6 +15,7 @@
 #include "Common/Thread/Promise.h"
 #include "Common/System/Display.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
+#include "Common/GPU/Vulkan/VulkanBarrier.h"
 #include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Data/Collections/FastVec.h"
 #include "Common/Math/math_util.h"
@@ -89,6 +89,7 @@ public:
 	VkDynamicState dynamicStates[6]{};
 	VkPipelineDynamicStateCreateInfo ds{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
 	VkPipelineRasterizationStateCreateInfo rs{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+	VkPipelineRasterizationProvokingVertexStateCreateInfoEXT rs_provoking{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT };
 
 	// Replaced the ShaderStageInfo with promises here so we can wait for compiles to finish.
 	Promise<VkShaderModule> *vertexShader = nullptr;
@@ -101,7 +102,7 @@ public:
 	std::string fragmentShaderSource;
 	std::string geometryShaderSource;
 
-	VkPrimitiveTopology topology;
+	VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 	VkVertexInputAttributeDescription attrs[8]{};
 	VkVertexInputBindingDescription ibd{};
 	VkPipelineVertexInputStateCreateInfo vis{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
@@ -114,19 +115,12 @@ public:
 	RPKey rpKey{};
 };
 
-// All the data needed to create a compute pipeline.
-struct VKRComputePipelineDesc {
-	VkPipelineCache pipelineCache;
-	VkComputePipelineCreateInfo pipe{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-};
-
-// Wrapped pipeline. Doesn't own desc.
+// Wrapped pipeline. Does own desc!
 struct VKRGraphicsPipeline {
 	VKRGraphicsPipeline(PipelineFlags flags, const char *tag) : flags_(flags), tag_(tag) {}
 	~VKRGraphicsPipeline();
 
 	bool Create(VulkanContext *vulkan, VkRenderPass compatibleRenderPass, RenderPassType rpType, VkSampleCountFlagBits sampleCount, double scheduleTime, int countToCompile);
-
 	void DestroyVariants(VulkanContext *vulkan, bool msaaOnly);
 
 	// This deletes the whole VKRGraphicsPipeline, you must remove your last pointer to it when doing this.
@@ -142,11 +136,11 @@ struct VKRGraphicsPipeline {
 
 	VKRGraphicsPipelineDesc *desc = nullptr;
 	Promise<VkPipeline> *pipeline[(size_t)RenderPassType::TYPE_COUNT]{};
+	std::mutex mutex_;  // protects the pipeline array
 
 	VkSampleCountFlagBits SampleCount() const { return sampleCount_; }
 
 	const char *Tag() const { return tag_.c_str(); }
-
 private:
 	void DestroyVariantsInstant(VkDevice device);
 
@@ -155,33 +149,16 @@ private:
 	VkSampleCountFlagBits sampleCount_ = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
 };
 
-struct VKRComputePipeline {
-	~VKRComputePipeline() {
-		delete pipeline;
-	}
-
-	VKRComputePipelineDesc *desc = nullptr;
-	Promise<VkPipeline> *pipeline = nullptr;
-
-	bool CreateAsync(VulkanContext *vulkan);
-	bool Pending() const {
-		return pipeline == VK_NULL_HANDLE && desc != nullptr;
-	}
-};
-
 struct CompileQueueEntry {
 	CompileQueueEntry(VKRGraphicsPipeline *p, VkRenderPass _compatibleRenderPass, RenderPassType _renderPassType, VkSampleCountFlagBits _sampleCount)
 		: type(Type::GRAPHICS), graphics(p), compatibleRenderPass(_compatibleRenderPass), renderPassType(_renderPassType), sampleCount(_sampleCount) {}
-	CompileQueueEntry(VKRComputePipeline *p) : type(Type::COMPUTE), compute(p), renderPassType(RenderPassType::DEFAULT), sampleCount(VK_SAMPLE_COUNT_1_BIT), compatibleRenderPass(VK_NULL_HANDLE) {}  // renderpasstype here shouldn't matter
 	enum class Type {
 		GRAPHICS,
-		COMPUTE,
 	};
 	Type type;
 	VkRenderPass compatibleRenderPass;
 	RenderPassType renderPassType;
-	VKRGraphicsPipeline *graphics = nullptr;
-	VKRComputePipeline *compute = nullptr;
+	VKRGraphicsPipeline* graphics = nullptr;
 	VkSampleCountFlagBits sampleCount;
 };
 
@@ -201,16 +178,23 @@ struct PackedDescriptor {
 		} image;
 		struct {
 			VkBuffer buffer;
-			uint32_t offset;
 			uint32_t range;
+			uint32_t offset;
 		} buffer;
+#if false
+		struct {
+			VkBuffer buffer;
+			uint64_t range;  // write range and a zero offset in one operation with this.
+		} buffer_zero_offset;
+#endif
 	};
 };
 
 // Note that we only support a single descriptor set due to compatibility with some ancient devices.
-// We should probably eventually give that up.
+// We should probably eventually give that up eventually.
 struct VKRPipelineLayout {
 	~VKRPipelineLayout();
+
 	enum { MAX_DESC_SET_BINDINGS = 10 };
 	BindingType bindingTypes[MAX_DESC_SET_BINDINGS];
 
@@ -221,7 +205,8 @@ struct VKRPipelineLayout {
 	const char *tag = nullptr;
 
 	struct FrameData {
-		FrameData() : pool("GameDescPool", true) {}
+		FrameData() : pool("N/A", true) {}
+
 		VulkanDescSetPool pool;
 		FastVec<PackedDescriptor> descData_;
 		FastVec<PendingDescSet> descSets_;
@@ -233,6 +218,12 @@ struct VKRPipelineLayout {
 	FrameData frameData[VulkanContext::MAX_INFLIGHT_FRAMES];
 
 	void FlushDescSets(VulkanContext *vulkan, int frame, QueueProfileContext *profile);
+	void SetTag(const char *tag) {
+		this->tag = tag;
+		for (int i = 0; i < ARRAY_SIZE(frameData); i++) {
+			frameData[i].pool.SetTag(tag);
+		}
+	}
 };
 
 class VulkanRenderManager {
@@ -245,8 +236,7 @@ public:
 	// These can run on a different thread!
 	void Finish();
 	void Present();
-	// Zaps queued up commands. Use if you know there's a risk you've queued up stuff that has already been deleted. Can happen during in-game shutdown.
-	void Wipe();
+	void CheckNothingPending();
 
 	void SetInvalidationCallback(InvalidationCallback callback) {
 		invalidationCallback_ = callback;
@@ -287,7 +277,6 @@ public:
 	// Unless a variantBitmask is passed in, in which case we can just go ahead.
 	// WARNING: desc must stick around during the lifetime of the pipeline! It's not enough to build it on the stack and drop it.
 	VKRGraphicsPipeline *CreateGraphicsPipeline(VKRGraphicsPipelineDesc *desc, PipelineFlags pipelineFlags, uint32_t variantBitmask, VkSampleCountFlagBits sampleCount, bool cacheLoad, const char *tag);
-	VKRComputePipeline *CreateComputePipeline(VKRComputePipelineDesc *desc);
 
 	VKRPipelineLayout *CreatePipelineLayout(BindingType *bindingTypes, size_t bindingCount, bool geoShadersEnabled, const char *tag);
 	void DestroyPipelineLayout(VKRPipelineLayout *pipelineLayout);
@@ -295,9 +284,13 @@ public:
 	void ReportBadStateForDraw();
 
 	void NudgeCompilerThread() {
-		compileMutex_.lock();
+		compileQueueMutex_.lock();
 		compileCond_.notify_one();
-		compileMutex_.unlock();
+		compileQueueMutex_.unlock();
+	}
+
+	void AssertInRenderPass() const {
+		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
 	}
 
 	// This is the first call in a draw operation. Instead of asserting like we used to, you can now check the
@@ -400,7 +393,7 @@ public:
 		data.blendColor.color = color;
 	}
 
-	void PushConstants(VkPipelineLayout pipelineLayout, VkShaderStageFlags stages, int offset, int size, void *constants) {
+	void PushConstants(VkShaderStageFlags stages, int offset, int size, void *constants) {
 		_dbg_assert_(curRenderStep_ && curRenderStep_->stepType == VKRStepType::RENDER);
 		_dbg_assert_(size + offset < 40);
 		VkRenderData &data = curRenderStep_->commands.push_uninitialized();
@@ -535,27 +528,37 @@ public:
 		return outOfDateFrames_ > VulkanContext::MAX_INFLIGHT_FRAMES;
 	}
 
+	VulkanBarrierBatch &PostInitBarrier() {
+		return postInitBarrier_;
+	}
+
 	void ResetStats();
-	void DrainAndBlockCompileQueue();
-	void ReleaseCompileQueue();
+
+	void StartThreads();
+	void StopThreads();
+
+	size_t GetNumSteps() const {
+		return steps_.size();
+	}
 
 private:
 	void EndCurRenderStep();
 
-	void ThreadFunc();
+	void RenderThreadFunc();
 	void CompileThreadFunc();
 
 	void Run(VKRRenderThreadTask &task);
 
 	// Bad for performance but sometimes necessary for synchronous CPU readbacks (screenshots and whatnot).
 	void FlushSync();
-	void StopThread();
 
 	void PresentWaitThreadFunc();
 	void PollPresentTiming();
 
 	void ResetDescriptorLists(int frame);
 	void FlushDescriptors(int frame);
+
+	void SanityCheckPassesOnAdd();
 
 	FrameDataShared frameDataShared_;
 
@@ -576,7 +579,8 @@ private:
 	int curHeight_ = -1;
 
 	bool insideFrame_ = false;
-	bool run_ = false;
+	// probably doesn't need to be atomic.
+	std::atomic<bool> runCompileThread_{};
 
 	bool useRenderThread_ = true;
 	bool measurePresentTime_ = false;
@@ -592,7 +596,7 @@ private:
 
 	// Execution time state
 	VulkanContext *vulkan_;
-	std::thread thread_;
+	std::thread renderThread_;
 	VulkanQueueRunner queueRunner_;
 
 	// For pushing data on the queue.
@@ -610,9 +614,8 @@ private:
 	std::thread compileThread_;
 	// Sync
 	std::condition_variable compileCond_;
-	std::mutex compileMutex_;
+	std::mutex compileQueueMutex_;
 	std::vector<CompileQueueEntry> compileQueue_;
-	bool compileBlocked_ = false;
 
 	// Thread for measuring presentation delay.
 	std::thread presentWaitThread_;
@@ -625,6 +628,8 @@ private:
 	SimpleStat totalGPUTimeMs_;
 	SimpleStat renderCPUTimeMs_;
 	SimpleStat descUpdateTimeMs_;
+
+	VulkanBarrierBatch postInitBarrier_;
 
 	std::function<void(InvalidationCallbackFlags)> invalidationCallback_;
 

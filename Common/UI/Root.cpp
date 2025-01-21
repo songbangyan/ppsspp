@@ -88,7 +88,7 @@ void EnableFocusMovement(bool enable) {
 		if (focusedView) {
 			focusedView->FocusChanged(FF_LOSTFOCUS);
 		}
-		focusedView = 0;
+		focusedView = nullptr;
 	}
 }
 
@@ -97,10 +97,8 @@ bool IsFocusMovementEnabled() {
 }
 
 void LayoutViewHierarchy(const UIContext &dc, ViewGroup *root, bool ignoreInsets) {
-	if (!root) {
-		ERROR_LOG(SYSTEM, "Tried to layout a view hierarchy from a zero pointer root");
-		return;
-	}
+	_assert_(root);
+	_assert_(&dc);
 
 	Bounds rootBounds = ignoreInsets ? dc.GetBounds() : dc.GetLayoutBounds();
 
@@ -378,7 +376,7 @@ void UpdateViewHierarchy(ViewGroup *root) {
 	frameCount++;
 
 	if (!root) {
-		ERROR_LOG(SYSTEM, "Tried to update a view hierarchy from a zero pointer root");
+		ERROR_LOG(Log::System, "Tried to update a view hierarchy from a zero pointer root");
 		return;
 	}
 

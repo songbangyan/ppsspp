@@ -15,7 +15,7 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
-#include <algorithm>
+#include <algorithm>  // std::remove
 
 #include "ext/xxhash.h"
 
@@ -35,9 +35,10 @@
 #include "Core/HDRemaster.h"
 #include "GPU/ge_constants.h"
 #include "GPU/GPUState.h"
-#include "GPU/GPUInterface.h"
+#include "GPU/GPUCommon.h"
 #include "Core/FileSystems/MetaFileSystem.h"
 #include "Core/Util/PPGeDraw.h"
+#include "Core/HLE/HLE.h"
 #include "Core/HLE/sceKernel.h"
 #include "Core/HLE/sceKernelMemory.h"
 #include "Core/HLE/sceGe.h"
@@ -126,10 +127,13 @@ struct PPGeTextDrawerCacheKey {
 	int align;
 	float wrapWidth;
 };
+
 struct PPGeTextDrawerImage {
+	PPGeTextDrawerImage() : entry(0) {}
 	TextStringEntry entry;
 	u32 ptr;
 };
+
 static std::map<PPGeTextDrawerCacheKey, PPGeTextDrawerImage> textDrawerImages;
 
 void PPGeSetDrawContext(Draw::DrawContext *draw) {
@@ -137,7 +141,7 @@ void PPGeSetDrawContext(Draw::DrawContext *draw) {
 }
 
 // Overwrite the current text lines buffer so it can be drawn later.
-void PPGePrepareText(const char *text, float x, float y, PPGeAlign align, float scale, float lineHeightScale,
+void PPGePrepareText(std::string_view text, float x, float y, PPGeAlign align, float scale, float lineHeightScale,
 	int WrapType = PPGE_LINE_NONE, int wrapWidth = 0);
 
 // These functions must be called between PPGeBegin and PPGeEnd.
@@ -249,7 +253,7 @@ void __PPGeInit() {
 
 	bool loadedZIM = !skipZIM && LoadZIM("ppge_atlas.zim", width, height, &flags, imageData);
 	if (!skipZIM && !loadedZIM) {
-		ERROR_LOG(SCEGE, "Failed to load ppge_atlas.zim.\n\nPlace it in the directory \"assets\" under your PPSSPP directory.\n\nPPGe stuff will not be drawn.");
+		ERROR_LOG(Log::sceGe, "Failed to load ppge_atlas.zim.\n\nPlace it in the directory \"assets\" under your PPSSPP directory.\n\nPPGe stuff will not be drawn.");
 	}
 
 	if (loadedZIM) {
@@ -306,7 +310,7 @@ void __PPGeInit() {
 
 	atlasRequiresReset = false;
 
-	INFO_LOG(SCEGE, "PPGe drawing library initialized. DL: %08x Data: %08x Atlas: %08x (%i) Args: %08x",
+	INFO_LOG(Log::sceGe, "PPGe drawing library initialized. DL: %08x Data: %08x Atlas: %08x (%i) Args: %08x",
 		dlPtr, dataPtr, atlasPtr, atlasSize, listArgs.ptr);
 }
 
@@ -466,8 +470,8 @@ void PPGeEnd()
 		// We actually drew something
 		gpu->EnableInterrupts(false);
 		NotifyMemInfo(MemBlockFlags::WRITE, dlPtr, dlWritePtr - dlPtr, "PPGe ListCmds");
-		u32 list = sceGeListEnQueue(dlPtr, dlWritePtr, -1, listArgs.ptr);
-		DEBUG_LOG(SCEGE, "PPGe enqueued display list %i", list);
+		u32 list = hleCall(sceGe_user, u32, sceGeListEnQueue, dlPtr, dlWritePtr, -1, listArgs.ptr);
+		DEBUG_LOG(Log::sceGe, "PPGe enqueued display list %i", list);
 		gpu->EnableInterrupts(true);
 	}
 }
@@ -519,7 +523,7 @@ static const AtlasChar *PPGeGetChar(const AtlasFont &atlasfont, unsigned int cva
 }
 
 // Break a single text string into mutiple lines.
-static AtlasTextMetrics BreakLines(const char *text, const AtlasFont &atlasfont, float x, float y, 
+static AtlasTextMetrics BreakLines(std::string_view text, const AtlasFont &atlasfont, float x, float y, 
 									PPGeAlign align, float scale, float lineHeightScale, int wrapType, float wrapWidth, bool dryRun)
 {
 	y += atlasfont.ascend * scale;
@@ -769,23 +773,21 @@ static bool HasTextDrawer() {
 	return textDrawer != nullptr;
 }
 
-static std::string PPGeSanitizeText(const std::string &text) {
+static std::string PPGeSanitizeText(std::string_view text) {
 	return SanitizeUTF8(text);
 }
 
-void PPGeMeasureText(float *w, float *h, const char *text, float scale, int WrapType, int wrapWidth) {
+void PPGeMeasureText(float *w, float *h, std::string_view text, float scale, int WrapType, int wrapWidth) {
 	std::string s = PPGeSanitizeText(text);
 
 	if (HasTextDrawer()) {
-		std::string s2 = ReplaceAll(s, "&", "&&");
-
 		float mw, mh;
 		textDrawer->SetFontScale(scale, scale);
 		int dtalign = (WrapType & PPGE_LINE_WRAP_WORD) ? FLAG_WRAP_TEXT : 0;
 		if (WrapType & PPGE_LINE_USE_ELLIPSIS)
 			dtalign |= FLAG_ELLIPSIZE_TEXT;
 		Bounds b(0, 0, wrapWidth <= 0 ? 480.0f : wrapWidth, 272.0f);
-		textDrawer->MeasureStringRect(s2.c_str(), s2.size(), b, &mw, &mh, dtalign);
+		textDrawer->MeasureStringRect(s, b, &mw, &mh, dtalign);
 
 		if (w)
 			*w = mw;
@@ -808,7 +810,7 @@ void PPGeMeasureText(float *w, float *h, const char *text, float scale, int Wrap
 	if (h) *h = metrics.lineHeight * metrics.numLines;
 }
 
-void PPGePrepareText(const char *text, float x, float y, PPGeAlign align, float scale, float lineHeightScale, int WrapType, int wrapWidth)
+void PPGePrepareText(std::string_view text, float x, float y, PPGeAlign align, float scale, float lineHeightScale, int WrapType, int wrapWidth)
 {
 	const AtlasFont &atlasfont = g_ppge_atlas.fonts[0];
 	if (!g_ppge_atlas.IsMetadataLoaded() || g_ppge_atlas.num_fonts < 1) {
@@ -895,14 +897,14 @@ inline int GetPow2(int x) {
 	return ret;
 }
 
-static PPGeTextDrawerImage PPGeGetTextImage(const char *text, const PPGeStyle &style, float maxWidth, bool wrap) {
+static PPGeTextDrawerImage PPGeGetTextImage(std::string_view text, const PPGeStyle &style, float maxWidth, bool wrap) {
 	int tdalign = 0;
 	tdalign |= FLAG_ELLIPSIZE_TEXT;
 	if (wrap) {
 		tdalign |= FLAG_WRAP_TEXT;
 	}
 
-	PPGeTextDrawerCacheKey key{ text, tdalign, maxWidth / style.scale };
+	PPGeTextDrawerCacheKey key{ std::string(text), tdalign, maxWidth / style.scale };
 	PPGeTextDrawerImage im{};
 
 	auto cacheItem = textDrawerImages.find(key);
@@ -914,7 +916,7 @@ static PPGeTextDrawerImage PPGeGetTextImage(const char *text, const PPGeStyle &s
 		textDrawer->SetFontScale(style.scale, style.scale);
 		Bounds b(0, 0, maxWidth, 272.0f);
 		std::string cleaned = ReplaceAll(text, "\r", "");
-		textDrawer->DrawStringBitmapRect(bitmapData, im.entry, Draw::DataFormat::R8_UNORM, cleaned.c_str(), b, tdalign);
+		textDrawer->DrawStringBitmapRect(bitmapData, im.entry, Draw::DataFormat::R8_UNORM, cleaned.c_str(), b, tdalign, false);
 
 		int bufwBytes = ((im.entry.bmWidth + 31) / 32) * 16;
 		u32 sz = bufwBytes * (im.entry.bmHeight + 1);
@@ -1055,17 +1057,14 @@ static void PPGeDecimateTextImages(int age) {
 	}
 }
 
-void PPGeDrawText(const char *text, float x, float y, const PPGeStyle &style) {
-	if (!text) {
-		return;
-	}
+void PPGeDrawText(std::string_view text, float x, float y, const PPGeStyle &style) {
 	std::string str = PPGeSanitizeText(text);
 	if (str.empty()) {
 		return;
 	}
 
 	if (HasTextDrawer()) {
-		PPGeTextDrawerImage im = PPGeGetTextImage(ReplaceAll(str, "&", "&&").c_str(), style, 480.0f - x, false);
+		PPGeTextDrawerImage im = PPGeGetTextImage(str, style, 480.0f - x, false);
 		if (im.ptr) {
 			PPGeDrawTextImage(im, x, y, style);
 			return;
@@ -1105,7 +1104,7 @@ static std::string_view CropLinesToCount(std::string_view s, int numLines) {
 	return s.substr(0, len);
 }
 
-void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, float wrapHeight, const PPGeStyle &style) {
+void PPGeDrawTextWrapped(std::string_view text, float x, float y, float wrapWidth, float wrapHeight, const PPGeStyle &style) {
 	std::string s = PPGeSanitizeText(text);
 	if (wrapHeight != 0.0f) {
 		s = StripTrailingWhite(s);
@@ -1116,21 +1115,19 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 	float maxScaleDown = zoom == 1 ? 1.3f : 2.0f;
 
 	if (HasTextDrawer()) {
-		std::string s2 = ReplaceAll(s, "&", "&&");
-
 		float actualWidth, actualHeight;
 		Bounds b(0, 0, wrapWidth <= 0 ? 480.0f - x : wrapWidth, wrapHeight);
 		int tdalign = 0;
 		textDrawer->SetFontScale(style.scale, style.scale);
-		textDrawer->MeasureStringRect(s2.c_str(), s2.size(), b, &actualWidth, &actualHeight, tdalign | FLAG_WRAP_TEXT);
+		textDrawer->MeasureStringRect(s, b, &actualWidth, &actualHeight, tdalign | FLAG_WRAP_TEXT);
 
 		// Check if we need to scale the text down to fit better.
 		PPGeStyle adjustedStyle = style;
 		if (wrapHeight != 0.0f && actualHeight > wrapHeight) {
 			// Cheap way to get the line height.
 			float oneLine, twoLines;
-			textDrawer->MeasureString("|", 1, &actualWidth, &oneLine);
-			textDrawer->MeasureStringRect("|\n|", 3, Bounds(0, 0, 480, 272), &actualWidth, &twoLines);
+			textDrawer->MeasureString("|", &actualWidth, &oneLine);
+			textDrawer->MeasureStringRect("|\n|", Bounds(0, 0, 480, 272), &actualWidth, &twoLines);
 
 			float lineHeight = twoLines - oneLine;
 			if (actualHeight > wrapHeight * maxScaleDown) {
@@ -1138,14 +1135,14 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 				actualHeight = (maxLines + 1) * lineHeight;
 				// Add an ellipsis if it's just too long to be readable.
 				// On a PSP, it does this without scaling it down.
-				s2 = StripTrailingWhite(CropLinesToCount(s2, (int)maxLines));
-				s2.append("\n...");
+				s = StripTrailingWhite(CropLinesToCount(s, (int)maxLines));
+				s.append("\n...");
 			}
 
 			adjustedStyle.scale *= wrapHeight / actualHeight;
 		}
 
-		PPGeTextDrawerImage im = PPGeGetTextImage(s2.c_str(), adjustedStyle, wrapWidth <= 0 ? 480.0f - x : wrapWidth, true);
+		PPGeTextDrawerImage im = PPGeGetTextImage(s, adjustedStyle, wrapWidth <= 0 ? 480.0f - x : wrapWidth, true);
 		if (im.ptr) {
 			PPGeDrawTextImage(im, x, y, adjustedStyle);
 			return;
@@ -1154,7 +1151,7 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 
 	int sx = style.hasShadow ? 1 : 0;
 	int sy = style.hasShadow ? 2 : 0;
-	PPGePrepareText(s.c_str(), x + sx, y + sy, style.align, style.scale, style.scale, PPGE_LINE_USE_ELLIPSIS | PPGE_LINE_WRAP_WORD, wrapWidth);
+	PPGePrepareText(s, x + sx, y + sy, style.align, style.scale, style.scale, PPGE_LINE_USE_ELLIPSIS | PPGE_LINE_WRAP_WORD, wrapWidth);
 
 	float scale = style.scale;
 	float lineHeightScale = style.scale;
@@ -1175,12 +1172,12 @@ void PPGeDrawTextWrapped(const char *text, float x, float y, float wrapWidth, fl
 		// Try to keep the font as large as possible, so reduce the line height some.
 		scale = reduced * 1.15f;
 		lineHeightScale = reduced;
-		PPGePrepareText(s.c_str(), x + sx, y + sy, style.align, scale, lineHeightScale, PPGE_LINE_USE_ELLIPSIS | PPGE_LINE_WRAP_WORD, wrapWidth);
+		PPGePrepareText(s, x + sx, y + sy, style.align, scale, lineHeightScale, PPGE_LINE_USE_ELLIPSIS | PPGE_LINE_WRAP_WORD, wrapWidth);
 	}
 	if (style.hasShadow) {
 		// This doesn't have the nicer shadow because it's so many verts.
 		PPGeDrawCurrentText(style.shadowColor);
-		PPGePrepareText(s.c_str(), x, y, style.align, scale, lineHeightScale, PPGE_LINE_USE_ELLIPSIS | PPGE_LINE_WRAP_WORD, wrapWidth);
+		PPGePrepareText(s, x, y, style.align, scale, lineHeightScale, PPGE_LINE_USE_ELLIPSIS | PPGE_LINE_WRAP_WORD, wrapWidth);
 	}
 	PPGeDrawCurrentText(style.color);
 }
@@ -1346,7 +1343,7 @@ void PPGeDisableTexture()
 
 std::vector<PPGeImage *> PPGeImage::loadedTextures_;
 
-PPGeImage::PPGeImage(const std::string &pspFilename)
+PPGeImage::PPGeImage(std::string_view pspFilename)
 	: filename_(pspFilename) {
 }
 
@@ -1373,7 +1370,7 @@ bool PPGeImage::Load() {
 	} else {
 		std::vector<u8> pngData;
 		if (pspFileSystem.ReadEntireFile(filename_, pngData) < 0) {
-			WARN_LOG(SCEGE, "PPGeImage cannot load file %s", filename_.c_str());
+			WARN_LOG(Log::sceGe, "PPGeImage cannot load file %s", filename_.c_str());
 			loadFailed_ = true;
 			return false;
 		}
@@ -1381,7 +1378,7 @@ bool PPGeImage::Load() {
 		success = pngLoadPtr((const unsigned char *)&pngData[0], pngData.size(), &width_, &height_, &textureData);
 	}
 	if (!success) {
-		WARN_LOG(SCEGE, "Bad PPGeImage - not a valid png");
+		WARN_LOG(Log::sceGe, "Bad PPGeImage - not a valid png");
 		loadFailed_ = true;
 		return false;
 	}
@@ -1391,7 +1388,7 @@ bool PPGeImage::Load() {
 	texture_ = __PPGeDoAlloc(texSize, true, "Savedata Icon");
 	if (texture_ == 0) {
 		free(textureData);
-		WARN_LOG(SCEGE, "Bad PPGeImage - unable to allocate space for texture");
+		WARN_LOG(Log::sceGe, "Bad PPGeImage - unable to allocate space for texture");
 		// Don't set loadFailed_ here, we'll try again if there's more memory later.
 		return false;
 	}

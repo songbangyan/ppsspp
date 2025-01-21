@@ -26,7 +26,6 @@
 #include <mutex>
 
 #include "Common/CommonTypes.h"
-#include "Core/ELF/PBPReader.h"
 
 class FileLoader;
 
@@ -68,16 +67,16 @@ public:
 	bool IsDisc() const override { return true; }
 
 private:
-	u32 *index;
-	u8 *readBuffer;
-	u8 *zlibBuffer;
-	u32 zlibBufferFrame;
-	u8 indexShift;
-	u8 blockShift;
-	u32 frameSize;
-	u32 numBlocks;
-	u32 numFrames;
-	int ver_;
+	u32 *index = nullptr;
+	u8 *readBuffer = nullptr;
+	u8 *zlibBuffer = nullptr;
+	u32 zlibBufferFrame = 0;
+	u8 indexShift = 0;
+	u8 blockShift = 0;
+	u32 frameSize = 0;
+	u32 numBlocks = 0;
+	u32 numFrames = 0;
+	int ver_ = 0;
 };
 
 
@@ -113,28 +112,32 @@ public:
 	~NPDRMDemoBlockDevice();
 
 	bool ReadBlock(int blockNumber, u8 *outPtr, bool uncached = false) override;
-	u32 GetNumBlocks() const override {return (u32)lbaSize;}
+	u32 GetNumBlocks() const override {return (u32)lbaSize_;}
 	bool IsDisc() const override { return false; }
 
 private:
-	static std::mutex mutex_;
-	u32 lbaSize;
+	// TODO: Doubt this mutex is actually needed.
+	std::mutex mutex_;
 
-	u32 psarOffset;
-	int blockSize;
-	int blockLBAs;
-	u32 numBlocks;
+	u32 lbaSize_ = 0;
 
-	u8 vkey[16];
-	u8 hkey[16];
-	struct table_info *table;
+	u32 psarOffset = 0;
+	int blockSize_ = 0;
+	int blockLBAs_ = 0;
+	u32 numBlocks_ = 0;
 
-	int currentBlock;
-	u8 *blockBuf;
-	u8 *tempBuf;
+	u8 vkey[16]{};
+	u8 hkey[16]{};
+	struct table_info *table_ = nullptr;
+
+	int currentBlock_ = 0;
+	u8 *blockBuf_ = nullptr;
+	u8 *tempBuf_ = nullptr;
 };
 
 struct CHDImpl;
+
+struct ExtendedCoreFile;
 
 class CHDFileBlockDevice : public BlockDevice {
 public:
@@ -144,13 +147,13 @@ public:
 	bool ReadBlocks(u32 minBlock, int count, u8 *outPtr) override;
 	u32 GetNumBlocks() const override { return numBlocks; }
 	bool IsDisc() const override { return true; }
-
 private:
+	struct ExtendedCoreFile *core_file_ = nullptr;
 	std::unique_ptr<CHDImpl> impl_;
-	u8 *readBuffer;
-	u32 currentHunk;
-	u32 blocksPerHunk;
-	u32 numBlocks;
+	u8 *readBuffer = nullptr;
+	u32 currentHunk = 0;
+	u32 blocksPerHunk = 0;
+	u32 numBlocks = 0;
 };
 
 BlockDevice *constructBlockDevice(FileLoader *fileLoader);

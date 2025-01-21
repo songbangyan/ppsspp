@@ -54,7 +54,7 @@ private:
 
 LoongArchCPUInfoParser::LoongArchCPUInfoParser() {
 	std::string procdata, line;
-	if (!File::ReadFileToString(true, Path(procfile), procdata))
+	if (!File::ReadSysTextFileToString(Path(procfile), &procdata))
 		return;
 
 	std::istringstream file(procdata);
@@ -73,7 +73,7 @@ LoongArchCPUInfoParser::LoongArchCPUInfoParser() {
 }
 
 int LoongArchCPUInfoParser::ProcessorCount() {
-	static const char *marker = "core";
+	static const char * const marker = "core";
 	std::set<std::string> coreIndex;
 	for (auto core : cores_) {
 		for (auto line : core) {
@@ -87,22 +87,18 @@ int LoongArchCPUInfoParser::ProcessorCount() {
 
 int LoongArchCPUInfoParser::TotalLogicalCount() {
 	std::string presentData, line;
-	bool presentSuccess = File::ReadFileToString(true, Path(syscpupresentfile), presentData);
+	bool presentSuccess = File::ReadSysTextFileToString(Path(syscpupresentfile), &presentData);
 	if (presentSuccess) {
 		std::istringstream presentFile(presentData);
 
 		int low, high, found;
 		std::getline(presentFile, line);
 		found = sscanf(line.c_str(), "%d-%d", &low, &high);
-		if (found == 1){
-			return 1;
-		}
 		if (found == 2){
 			return high - low + 1;
 		}
-	}else{
-		return 1;
 	}
+	return 1;
 }
 
 #endif

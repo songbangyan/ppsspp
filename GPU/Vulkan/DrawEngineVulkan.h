@@ -123,33 +123,20 @@ public:
 	void DeviceLost() override;
 	void DeviceRestore(Draw::DrawContext *draw) override;
 
-	// So that this can be inlined
-	void Flush() {
-		if (!numDrawInds_)
-			return;
-		DoFlush();
-	}
+	void Flush() override;
 
 	void FinishDeferred() {
-		if (!numDrawInds_)
-			return;
 		// Decode any pending vertices. And also flush while we're at it, for simplicity.
 		// It might be possible to only decode like in the other backends, but meh, it can't matter.
 		// Issue #10095 has a nice example of where this is required.
-		DoFlush();
-	}
-
-	void DispatchFlush() override {
-		if (!numDrawInds_)
-			return;
-		DoFlush();
+		Flush();
 	}
 
 	VKRPipelineLayout *GetPipelineLayout() const {
 		return pipelineLayout_;
 	}
 
-	void BeginFrame();
+	void BeginFrame() override;
 	void EndFrame();
 
 	void DirtyAllUBOs();
@@ -183,7 +170,6 @@ private:
 
 	void DestroyDeviceObjects();
 
-	void DoFlush();
 	void UpdateUBOs();
 
 	NO_INLINE void ResetAfterDraw();
@@ -191,8 +177,8 @@ private:
 	Draw::DrawContext *draw_;
 
 	// We use a shared descriptor set layouts for all PSP draws.
-	VKRPipelineLayout *pipelineLayout_;
-	VulkanPipeline *lastPipeline_;
+	VKRPipelineLayout *pipelineLayout_ = nullptr;
+	VulkanPipeline *lastPipeline_ = nullptr;
 	VkDescriptorSet lastDs_ = VK_NULL_HANDLE;
 
 	// Secondary texture for shader blending
@@ -228,11 +214,13 @@ private:
 	FramebufferManagerVulkan *framebufferManager_ = nullptr;
 
 	// State cache
-	uint64_t dirtyUniforms_;
-	uint32_t baseUBOOffset;
-	uint32_t lightUBOOffset;
-	uint32_t boneUBOOffset;
-	VkBuffer baseBuf, lightBuf, boneBuf;
+	uint64_t dirtyUniforms_ = 0;
+	uint32_t baseUBOOffset = 0;
+	uint32_t lightUBOOffset = 0;
+	uint32_t boneUBOOffset = 0;
+	VkBuffer baseBuf = VK_NULL_HANDLE;
+	VkBuffer lightBuf = VK_NULL_HANDLE;
+	VkBuffer boneBuf = VK_NULL_HANDLE;
 	VkImageView imageView = VK_NULL_HANDLE;
 	VkSampler sampler = VK_NULL_HANDLE;
 

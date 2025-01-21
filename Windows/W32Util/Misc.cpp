@@ -1,5 +1,5 @@
 #include "ppsspp_config.h"
-#include "CommonWindows.h"
+#include "Common/CommonWindows.h"
 
 #include <WinUser.h>
 #include <shellapi.h>
@@ -10,6 +10,7 @@
 #include "Common/Data/Encoding/Utf8.h"
 #include "Common/StringUtils.h"
 #include "Common/File/FileUtil.h"
+#include "Common/Log.h"
 
 bool KeyDownAsync(int vkey) {
 #if PPSSPP_PLATFORM(UWP)
@@ -101,14 +102,22 @@ namespace W32Util
 		// SHParseDisplayName can't handle relative paths, so normalize first.
 		std::string resolved = ReplaceAll(File::ResolvePath(path), "/", "\\");
 
-		SFGAOF flags{};
+		// Shell also can't handle \\?\UNC\ paths.
+		// TODO: Move this to ResolvePath?
+		if (startsWith(resolved, "\\\\?\\UNC\\")) {
+			resolved = "\\" + resolved.substr(7);
+		}
+
 		PIDLIST_ABSOLUTE pidl = nullptr;
-		HRESULT hr = SHParseDisplayName(ConvertUTF8ToWString(resolved).c_str(), nullptr, &pidl, 0, &flags);
+		std::wstring wresolved = ConvertUTF8ToWString(resolved);
+		HRESULT hr = SHParseDisplayName(wresolved.c_str(), nullptr, &pidl, 0, nullptr);
 
 		if (pidl) {
 			if (SUCCEEDED(hr))
 				SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-			CoTaskMemFree(pidl);
+			ILFree(pidl);
+		} else {
+			ERROR_LOG(Log::System, "SHParseDisplayName failed: %s", resolved.c_str());
 		}
 	}
 
@@ -343,7 +352,7 @@ int GenericListControl::HandleNotify(LPARAM lParam) {
 		NMLVDISPINFO* dispInfo = (NMLVDISPINFO*)lParam;
 
 		stringBuffer[0] = 0;
-		GetColumnText(stringBuffer,dispInfo->item.iItem,dispInfo->item.iSubItem);
+		GetColumnText(stringBuffer, ARRAY_SIZE(stringBuffer), dispInfo->item.iItem,dispInfo->item.iSubItem);
 		
 		if (stringBuffer[0] == 0)
 			wcscat(stringBuffer,L"Invalid");
@@ -402,7 +411,7 @@ int GenericListControl::OnIncrementalSearch(int startRow, const wchar_t *str, bo
 		for (int i = 0; i < size; ++i) {
 			int r = (startRow + i) % size;
 			stringBuffer[0] = 0;
-			GetColumnText(stringBuffer, r, c);
+			GetColumnText(stringBuffer, ARRAY_SIZE(stringBuffer), r, c);
 			int difference = partial ? _wcsnicmp(str, stringBuffer, searchlen) : _wcsicmp(str, stringBuffer);
 			if (difference == 0)
 				return r;
@@ -582,7 +591,7 @@ void GenericListControl::CopyRows(int start, int size)
 		for (int c = 0; c < columnCount; ++c)
 		{
 			stringBuffer[0] = 0;
-			GetColumnText(stringBuffer, r, c);
+			GetColumnText(stringBuffer, ARRAY_SIZE(stringBuffer), r, c);
 			data.append(stringBuffer);
 			if (c < columnCount - 1)
 				data.append(L"\t");

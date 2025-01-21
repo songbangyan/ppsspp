@@ -19,23 +19,12 @@
 
 #include "ppsspp_config.h"
 #include <cmath>
+#include <cstring>
 
 #include "Common/Common.h"
 #include "Core/Util/AudioFormat.h"  // for clamp_u8
 #include "Common/Math/fast/fast_matrix.h"
-
-#if defined(_M_SSE)
-#include <emmintrin.h>
-#include <smmintrin.h>
-#endif
-
-#if PPSSPP_ARCH(ARM_NEON)
-#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
-#include <arm64_neon.h>
-#else
-#include <arm_neon.h>
-#endif
-#endif
+#include "Common/Math/SIMDHeaders.h"
 
 #if PPSSPP_PLATFORM(WINDOWS) && (defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER))
 #define MATH3D_CALL __vectorcall
@@ -912,6 +901,7 @@ float MATH3D_CALL vectorGetByIndex(__m128 v) {
 
 #if defined(_M_SSE)
 // x, y, and z should be broadcast.  Should only be used through Vec3f version.
+// Note that this will read an extra float from the matrix, so it better not be at the end of an allocation!
 inline __m128 MATH3D_CALL Vec3ByMatrix43Internal(__m128 x, __m128 y, __m128 z, const float m[12]) {
 	__m128 col0 = _mm_loadu_ps(m);
 	__m128 col1 = _mm_loadu_ps(m + 3);

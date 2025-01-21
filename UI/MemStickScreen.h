@@ -27,6 +27,8 @@
 #include "Common/UI/UIScreen.h"
 #include "Common/Thread/Promise.h"
 
+#include "Core/Util/MemStick.h"
+
 #include "UI/MiscScreens.h"
 
 class NoticeView;
@@ -36,7 +38,7 @@ class NoticeView;
 class MemStickScreen : public UIDialogScreenWithBackground {
 public:
 	MemStickScreen(bool initialSetup);
-	~MemStickScreen() {}
+	~MemStickScreen() = default;
 
 	const char *tag() const override { return "MemStick"; }
 
@@ -91,33 +93,13 @@ private:
 #endif
 };
 
-class ProgressReporter {
-public:
-	void Set(const std::string &value) {
-		std::lock_guard<std::mutex> guard(mutex_);
-		progress_ = value;
-	}
-
-	std::string Get() {
-		std::lock_guard<std::mutex> guard(mutex_);
-		return progress_;
-	}
-
-private:
-	std::string progress_;
-	std::mutex mutex_;
-};
-
-struct MoveResult {
-	bool success;  // Got through the whole move.
-	std::string errorMessage;
-	size_t failedFiles;
-	size_t skippedFiles;
+struct SpaceResult {
+	int64_t bytesFree;
 };
 
 class ConfirmMemstickMoveScreen : public UIDialogScreenWithBackground {
 public:
-	ConfirmMemstickMoveScreen(Path newMemstickFolder, bool initialSetup);
+	ConfirmMemstickMoveScreen(const Path &newMemstickFolder, bool initialSetup);
 	~ConfirmMemstickMoveScreen();
 
 	const char *tag() const override { return "ConfirmMemstickMove"; }
@@ -141,10 +123,14 @@ private:
 #endif
 	bool initialSetup_;
 
-	ProgressReporter progressReporter_;
+	MoveProgressReporter progressReporter_;
 	UI::TextView *progressView_ = nullptr;
+	UI::TextView *newFreeSpaceView_ = nullptr;
+	UI::TextView *oldFreeSpaceView_ = nullptr;
 
 	Promise<MoveResult *> *moveDataTask_ = nullptr;
+	Promise<SpaceResult *> *oldSpaceTask_ = nullptr;
+	Promise<SpaceResult *> *newSpaceTask_ = nullptr;
 
 	std::string error_;
 };

@@ -1,7 +1,6 @@
 #include <cstdio>
 #include <vector>
 #include <string>
-#include <algorithm>
 #include <map>
 
 #include "ppsspp_config.h"
@@ -245,10 +244,10 @@ private:
 };
 
 bool OpenGLShaderModule::Compile(GLRenderManager *render, ShaderLanguage language, const uint8_t *data, size_t dataSize) {
-	source_ = std::string((const char *)data);
+	source_ = std::string((const char *)data, dataSize);
 	// Add the prelude on automatically.
 	if (glstage_ == GL_FRAGMENT_SHADER || glstage_ == GL_VERTEX_SHADER) {
-		if (source_.find("#version") == source_.npos) {
+		if (source_.find("#version") == std::string::npos) {
 			source_ = ApplyGLSLPrelude(source_, glstage_);
 		}
 	} else {
@@ -325,6 +324,13 @@ public:
 	OpenGLContext(bool canChangeSwapInterval);
 	~OpenGLContext();
 
+	BackendState GetCurrentBackendState() const override {
+		return BackendState{
+			(u32)renderManager_.GetNumSteps(),
+			true,  // Means that the other value is meaningful.
+		};
+	}
+
 	void SetTargetSize(int w, int h) override {
 		DrawContext::SetTargetSize(w, h);
 		renderManager_.Resize(w, h);
@@ -370,13 +376,13 @@ public:
 	void UpdateBuffer(Buffer *buffer, const uint8_t *data, size_t offset, size_t size, UpdateBufferFlags flags) override;
 	void UpdateTextureLevels(Texture *texture, const uint8_t **data, TextureCallback initDataCallback, int numLevels) override;
 
-	void CopyFramebufferImage(Framebuffer *src, int level, int x, int y, int z, Framebuffer *dst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits, const char *tag) override;
-	bool BlitFramebuffer(Framebuffer *src, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dst, int dstX1, int dstY1, int dstX2, int dstY2, int channelBits, FBBlitFilter filter, const char *tag) override;
-	bool CopyFramebufferToMemory(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat format, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) override;
+	void CopyFramebufferImage(Framebuffer *src, int level, int x, int y, int z, Framebuffer *dst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, Aspect aspects, const char *tag) override;
+	bool BlitFramebuffer(Framebuffer *src, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *dst, int dstX1, int dstY1, int dstX2, int dstY2, Aspect aspects, FBBlitFilter filter, const char *tag) override;
+	bool CopyFramebufferToMemory(Framebuffer *src, Aspect channelBits, int x, int y, int w, int h, Draw::DataFormat format, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) override;
 
 	// These functions should be self explanatory.
 	void BindFramebufferAsRenderTarget(Framebuffer *fbo, const RenderPassInfo &rp, const char *tag) override;
-	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) override;
+	void BindFramebufferAsTexture(Framebuffer *fbo, int binding, Aspect channelBit, int layer) override;
 
 	void GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) override;
 
@@ -436,40 +442,43 @@ public:
 	void Draw(int vertexCount, int offset) override;
 	void DrawIndexed(int vertexCount, int offset) override;
 	void DrawUP(const void *vdata, int vertexCount) override;
+	void DrawIndexedUP(const void *vdata, int vertexCount, const void *idata, int indexCount) override;
+	void DrawIndexedClippedBatchUP(const void *vdata, int vertexCount, const void *idata, int indexCount, Slice<ClippedDraw> draws, const void *ub, size_t ubSize) override;
 
-	void Clear(int mask, uint32_t colorval, float depthVal, int stencilVal) override;
+	void Clear(Aspect mask, uint32_t colorval, float depthVal, int stencilVal) override;
 
 	std::string GetInfoString(InfoField info) const override {
 		// TODO: Make these actually query the right information
 		switch (info) {
-			case APINAME:
-				if (gl_extensions.IsGLES) {
-					return "OpenGL ES";
-				} else {
-					return "OpenGL";
-				}
-			case VENDORSTRING: return renderManager_.GetGLString(GL_VENDOR);
-			case VENDOR:
-				switch (caps_.vendor) {
-				case GPUVendor::VENDOR_AMD: return "VENDOR_AMD";
-				case GPUVendor::VENDOR_IMGTEC: return "VENDOR_POWERVR";
-				case GPUVendor::VENDOR_NVIDIA: return "VENDOR_NVIDIA";
-				case GPUVendor::VENDOR_INTEL: return "VENDOR_INTEL";
-				case GPUVendor::VENDOR_QUALCOMM: return "VENDOR_ADRENO";
-				case GPUVendor::VENDOR_ARM: return "VENDOR_ARM";
-				case GPUVendor::VENDOR_BROADCOM: return "VENDOR_BROADCOM";
-				case GPUVendor::VENDOR_VIVANTE: return "VENDOR_VIVANTE";
-				case GPUVendor::VENDOR_APPLE: return "VENDOR_APPLE";
-				case GPUVendor::VENDOR_MESA: return "VENDOR_MESA";
-				case GPUVendor::VENDOR_UNKNOWN:
-				default:
-					return "VENDOR_UNKNOWN";
-				}
-				break;
-			case DRIVER: return renderManager_.GetGLString(GL_RENDERER);
-			case SHADELANGVERSION: return renderManager_.GetGLString(GL_SHADING_LANGUAGE_VERSION);
-			case APIVERSION: return renderManager_.GetGLString(GL_VERSION);
-			default: return "?";
+		case InfoField::APINAME:
+			if (gl_extensions.IsGLES) {
+				return "OpenGL ES";
+			} else {
+				return "OpenGL";
+			}
+		case InfoField::VENDORSTRING:
+			return renderManager_.GetGLString(GL_VENDOR);
+		case InfoField::VENDOR:
+			switch (caps_.vendor) {
+			case GPUVendor::VENDOR_AMD: return "VENDOR_AMD";
+			case GPUVendor::VENDOR_IMGTEC: return "VENDOR_POWERVR";
+			case GPUVendor::VENDOR_NVIDIA: return "VENDOR_NVIDIA";
+			case GPUVendor::VENDOR_INTEL: return "VENDOR_INTEL";
+			case GPUVendor::VENDOR_QUALCOMM: return "VENDOR_ADRENO";
+			case GPUVendor::VENDOR_ARM: return "VENDOR_ARM";
+			case GPUVendor::VENDOR_BROADCOM: return "VENDOR_BROADCOM";
+			case GPUVendor::VENDOR_VIVANTE: return "VENDOR_VIVANTE";
+			case GPUVendor::VENDOR_APPLE: return "VENDOR_APPLE";
+			case GPUVendor::VENDOR_MESA: return "VENDOR_MESA";
+			case GPUVendor::VENDOR_UNKNOWN:
+			default:
+				return "VENDOR_UNKNOWN";
+			}
+			break;
+		case InfoField::DRIVER: return renderManager_.GetGLString(GL_RENDERER);
+		case InfoField::SHADELANGVERSION: return renderManager_.GetGLString(GL_SHADING_LANGUAGE_VERSION);
+		case InfoField::APIVERSION: return renderManager_.GetGLString(GL_VERSION);
+		default: return "?";
 		}
 	}
 
@@ -564,6 +573,7 @@ OpenGLContext::OpenGLContext(bool canChangeSwapInterval) : renderManager_(frameT
 		caps_.textureDepthSupported = true;
 	}
 
+	caps_.coordConvention = CoordConvention::OpenGL;
 	caps_.setMaxFrameLatencySupported = true;
 	caps_.dualSourceBlend = gl_extensions.ARB_blend_func_extended || gl_extensions.EXT_blend_func_extended;
 	caps_.anisoSupported = gl_extensions.EXT_texture_filter_anisotropic;
@@ -597,6 +607,9 @@ OpenGLContext::OpenGLContext(bool canChangeSwapInterval) : renderManager_(frameT
 
 	// GLES has no support for logic framebuffer operations. There doesn't even seem to exist any such extensions.
 	caps_.logicOpSupported = !gl_extensions.IsGLES;
+
+	// Always the case in GL (which is what we want for PSP flat shade).
+	caps_.provokingVertexLast = true;
 
 	// Interesting potential hack for emulating GL_DEPTH_CLAMP (use a separate varying, force depth in fragment shader):
 	// This will induce a performance penalty on many architectures though so a blanket enable of this
@@ -642,7 +655,7 @@ OpenGLContext::OpenGLContext(bool canChangeSwapInterval) : renderManager_(frameT
 		// Note: this is for Intel drivers with GL3+.
 		// Also on Intel, see https://github.com/hrydgard/ppsspp/issues/10117
 		// TODO: Remove entirely sometime reasonably far in driver years after 2015.
-		const std::string ver = GetInfoString(Draw::InfoField::APIVERSION);
+		const std::string ver = OpenGLContext::GetInfoString(Draw::InfoField::APIVERSION);
 		int versions[4]{};
 		if (sscanf(ver.c_str(), "Build %d.%d.%d.%d", &versions[0], &versions[1], &versions[2], &versions[3]) == 4) {
 			if (HasIntelDualSrcBug(versions)) {
@@ -765,7 +778,7 @@ OpenGLContext::OpenGLContext(bool canChangeSwapInterval) : renderManager_(frameT
 
 		if (gl_extensions.EXT_shader_framebuffer_fetch) {
 			shaderLanguageDesc_.framebufferFetchExtension = "#extension GL_EXT_shader_framebuffer_fetch : require";
-			shaderLanguageDesc_.lastFragData = gl_extensions.GLES3 ? "fragColor0" : "gl_LastFragData[0]";
+			shaderLanguageDesc_.lastFragData = "fragColor0";
 		} else if (gl_extensions.ARM_shader_framebuffer_fetch) {
 			shaderLanguageDesc_.framebufferFetchExtension = "#extension GL_ARM_shader_framebuffer_fetch : require";
 			shaderLanguageDesc_.lastFragData = "gl_LastFragColorARM";
@@ -796,12 +809,12 @@ OpenGLContext::~OpenGLContext() {
 void OpenGLContext::BeginFrame(DebugFlags debugFlags) {
 	renderManager_.BeginFrame(debugFlags & DebugFlags::PROFILE_TIMESTAMPS);
 	FrameData &frameData = frameData_[renderManager_.GetCurFrame()];
-	renderManager_.BeginPushBuffer(frameData.push);
+	frameData.push->Begin();
 }
 
 void OpenGLContext::EndFrame() {
 	FrameData &frameData = frameData_[renderManager_.GetCurFrame()];
-	renderManager_.EndPushBuffer(frameData.push);  // upload the data!
+	frameData.push->End();  // upload the data!
 	renderManager_.Finish();
 	Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 }
@@ -843,7 +856,7 @@ static GLuint TypeToTarget(TextureType type) {
 #endif
 	case TextureType::ARRAY2D: return GL_TEXTURE_2D_ARRAY;
 	default:
-		ERROR_LOG(G3D,  "Bad texture type %d", (int)type);
+		ERROR_LOG(Log::G3D,  "Bad texture type %d", (int)type);
 		return GL_NONE;
 	}
 }
@@ -864,7 +877,7 @@ public:
 	int NumMipmaps() const {
 		return mipLevels_;
 	}
-	const GLRTexture *GetTex() const {
+	GLRTexture *GetTex() const {
 		return tex_;
 	}
 
@@ -884,6 +897,7 @@ private:
 
 OpenGLTexture::OpenGLTexture(GLRenderManager *render, const TextureDesc &desc) : render_(render) {
 	_dbg_assert_(desc.format != Draw::DataFormat::UNDEFINED);
+	_dbg_assert_msg_(desc.width > 0 && desc.height > 0 && desc.depth > 0, "w: %d h: %d d: %d fmt: %s", desc.width, desc.height, desc.depth, DataFormatToString(desc.format));
 	_dbg_assert_(desc.width > 0 && desc.height > 0 && desc.depth > 0);
 	_dbg_assert_(desc.type != Draw::TextureType::UNKNOWN);
 
@@ -958,7 +972,7 @@ void OpenGLTexture::SetImageData(int x, int y, int z, int width, int height, int
 		depth_ = depth;
 	}
 
-	if (stride == 0)
+	if (!stride)
 		stride = width;
 
 	size_t alignment = DataFormatSizeInBytes(format_);
@@ -998,47 +1012,47 @@ static void LogReadPixelsError(GLenum error) {
 	case GL_NO_ERROR:
 		break;
 	case GL_INVALID_ENUM:
-		ERROR_LOG(G3D, "glReadPixels: GL_INVALID_ENUM");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_INVALID_ENUM");
 		break;
 	case GL_INVALID_VALUE:
-		ERROR_LOG(G3D, "glReadPixels: GL_INVALID_VALUE");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_INVALID_VALUE");
 		break;
 	case GL_INVALID_OPERATION:
-		ERROR_LOG(G3D, "glReadPixels: GL_INVALID_OPERATION");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_INVALID_OPERATION");
 		break;
 	case GL_INVALID_FRAMEBUFFER_OPERATION:
-		ERROR_LOG(G3D, "glReadPixels: GL_INVALID_FRAMEBUFFER_OPERATION");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_INVALID_FRAMEBUFFER_OPERATION");
 		break;
 	case GL_OUT_OF_MEMORY:
-		ERROR_LOG(G3D, "glReadPixels: GL_OUT_OF_MEMORY");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_OUT_OF_MEMORY");
 		break;
 #ifndef USING_GLES2
 	case GL_STACK_UNDERFLOW:
-		ERROR_LOG(G3D, "glReadPixels: GL_STACK_UNDERFLOW");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_STACK_UNDERFLOW");
 		break;
 	case GL_STACK_OVERFLOW:
-		ERROR_LOG(G3D, "glReadPixels: GL_STACK_OVERFLOW");
+		ERROR_LOG(Log::G3D, "glReadPixels: GL_STACK_OVERFLOW");
 		break;
 #endif
 	default:
-		ERROR_LOG(G3D, "glReadPixels: %08x", error);
+		ERROR_LOG(Log::G3D, "glReadPixels: %08x", error);
 		break;
 	}
 }
 #endif
 
-bool OpenGLContext::CopyFramebufferToMemory(Framebuffer *src, int channelBits, int x, int y, int w, int h, Draw::DataFormat dataFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
-	if (gl_extensions.IsGLES && (channelBits & FB_COLOR_BIT) == 0) {
+bool OpenGLContext::CopyFramebufferToMemory(Framebuffer *src, Aspect channelBits, int x, int y, int w, int h, Draw::DataFormat dataFormat, void *pixels, int pixelStride, ReadbackMode mode, const char *tag) {
+	if (gl_extensions.IsGLES && (channelBits & Aspect::COLOR_BIT) == 0) {
 		// Can't readback depth or stencil on GLES.
 		return false;
 	}
 	OpenGLFramebuffer *fb = (OpenGLFramebuffer *)src;
 	GLuint aspect = 0;
-	if (channelBits & FB_COLOR_BIT)
+	if (channelBits & Aspect::COLOR_BIT)
 		aspect |= GL_COLOR_BUFFER_BIT;
-	if (channelBits & FB_DEPTH_BIT)
+	if (channelBits & Aspect::DEPTH_BIT)
 		aspect |= GL_DEPTH_BUFFER_BIT;
-	if (channelBits & FB_STENCIL_BIT)
+	if (channelBits & Aspect::STENCIL_BIT)
 		aspect |= GL_STENCIL_BUFFER_BIT;
 	return renderManager_.CopyFramebufferToMemory(fb ? fb->framebuffer_ : nullptr, aspect, x, y, w, h, dataFormat, (uint8_t *)pixels, pixelStride, mode, tag);
 }
@@ -1166,15 +1180,15 @@ void OpenGLContext::UpdateBuffer(Buffer *buffer, const uint8_t *data, size_t off
 
 Pipeline *OpenGLContext::CreateGraphicsPipeline(const PipelineDesc &desc, const char *tag) {
 	if (!desc.shaders.size()) {
-		ERROR_LOG(G3D,  "Pipeline requires at least one shader");
+		ERROR_LOG(Log::G3D,  "Pipeline requires at least one shader");
 		return nullptr;
 	}
 	if ((uint32_t)desc.prim >= (uint32_t)Primitive::PRIMITIVE_TYPE_COUNT) {
-		ERROR_LOG(G3D, "Invalid primitive type");
+		ERROR_LOG(Log::G3D, "Invalid primitive type");
 		return nullptr;
 	}
 	if (!desc.depthStencil || !desc.blend || !desc.raster) {
-		ERROR_LOG(G3D,  "Incomplete prim desciption");
+		ERROR_LOG(Log::G3D,  "Incomplete prim desciption");
 		return nullptr;
 	}
 
@@ -1184,7 +1198,7 @@ Pipeline *OpenGLContext::CreateGraphicsPipeline(const PipelineDesc &desc, const 
 			iter->AddRef();
 			pipeline->shaders.push_back(static_cast<OpenGLShaderModule *>(iter));
 		} else {
-			ERROR_LOG(G3D,  "ERROR: Tried to create graphics pipeline %s with a null shader module", tag ? tag : "no tag");
+			ERROR_LOG(Log::G3D,  "ERROR: Tried to create graphics pipeline %s with a null shader module", tag ? tag : "no tag");
 			delete pipeline;
 			return nullptr;
 		}
@@ -1205,7 +1219,7 @@ Pipeline *OpenGLContext::CreateGraphicsPipeline(const PipelineDesc &desc, const 
 		pipeline->inputLayout = (OpenGLInputLayout *)desc.inputLayout;
 		return pipeline;
 	} else {
-		ERROR_LOG(G3D,  "Failed to create pipeline %s - shaders failed to link", tag ? tag : "no tag");
+		ERROR_LOG(Log::G3D,  "Failed to create pipeline %s - shaders failed to link", tag ? tag : "no tag");
 		delete pipeline;
 		return nullptr;
 	}
@@ -1274,11 +1288,11 @@ bool OpenGLPipeline::LinkShaders(const PipelineDesc &desc) {
 			if (shader) {
 				linkShaders.push_back(shader);
 			} else {
-				ERROR_LOG(G3D,  "LinkShaders: Bad shader module");
+				ERROR_LOG(Log::G3D,  "LinkShaders: Bad shader module");
 				return false;
 			}
 		} else {
-			ERROR_LOG(G3D,  "LinkShaders: Bad shader in module");
+			ERROR_LOG(Log::G3D,  "LinkShaders: Bad shader in module");
 			return false;
 		}
 	}
@@ -1405,17 +1419,88 @@ void OpenGLContext::DrawUP(const void *vdata, int vertexCount) {
 	renderManager_.Draw(curPipeline_->inputLayout->inputLayout_, buf, offset, curPipeline_->prim, 0, vertexCount);
 }
 
-void OpenGLContext::Clear(int mask, uint32_t colorval, float depthVal, int stencilVal) {
+void OpenGLContext::DrawIndexedUP(const void *vdata, int vertexCount, const void *idata, int indexCount) {
+	_assert_(curPipeline_->inputLayout != nullptr);
+	int stride = curPipeline_->inputLayout->stride;
+	uint32_t vdataSize = stride * vertexCount;
+	uint32_t idataSize = indexCount * sizeof(u16);
+
+	FrameData &frameData = frameData_[renderManager_.GetCurFrame()];
+
+	GLRBuffer *vbuf;
+	uint32_t voffset;
+	uint8_t *dest = frameData.push->Allocate(vdataSize, 4, &vbuf, &voffset);
+	memcpy(dest, vdata, vdataSize);
+
+	GLRBuffer *ibuf;
+	uint32_t ioffset;
+	dest = frameData.push->Allocate(idataSize, 4, &ibuf, &ioffset);
+	memcpy(dest, idata, idataSize);
+
+	ApplySamplers();
+	renderManager_.DrawIndexed(curPipeline_->inputLayout->inputLayout_, vbuf, voffset, ibuf, ioffset, curPipeline_->prim, indexCount, GL_UNSIGNED_SHORT, 1);
+}
+
+void OpenGLContext::DrawIndexedClippedBatchUP(const void *vdata, int vertexCount, const void *idata, int indexCount, Slice<ClippedDraw> draws, const void *ub, size_t ubSize) {
+	if (draws.is_empty() || !vertexCount || !indexCount) {
+		return;
+	}
+
+	BindPipeline(draws[0].pipeline);
+	UpdateDynamicUniformBuffer(ub, ubSize);
+
+	_assert_(curPipeline_->inputLayout != nullptr);
+	int stride = curPipeline_->inputLayout->stride;
+	uint32_t vdataSize = stride * vertexCount;
+	int indexSize = sizeof(u16);
+	uint32_t idataSize = indexCount * indexSize;
+
+	FrameData &frameData = frameData_[renderManager_.GetCurFrame()];
+
+	GLRBuffer *vbuf;
+	uint32_t voffset;
+	uint8_t *dest = frameData.push->Allocate(vdataSize, 4, &vbuf, &voffset);
+	memcpy(dest, vdata, vdataSize);
+
+	GLRBuffer *ibuf;
+	uint32_t ioffset;
+	dest = frameData.push->Allocate(idataSize, 4, &ibuf, &ioffset);
+	memcpy(dest, idata, idataSize);
+
+	ApplySamplers();
+	for (auto &draw : draws) {
+		if (draw.pipeline != curPipeline_) {
+			OpenGLPipeline *glPipeline = (OpenGLPipeline *)draw.pipeline;
+			_dbg_assert_(glPipeline->inputLayout->stride == stride);
+			BindPipeline(glPipeline);  // this updated curPipeline_.
+			UpdateDynamicUniformBuffer(ub, ubSize);
+		}
+		if (draw.bindTexture) {
+			renderManager_.BindTexture(0, ((OpenGLTexture *)draw.bindTexture)->GetTex());
+		} else if (draw.bindFramebufferAsTex) {
+			renderManager_.BindFramebufferAsTexture(((OpenGLFramebuffer*)draw.bindFramebufferAsTex)->framebuffer_, 0, GL_COLOR_BUFFER_BIT);
+		}
+		GLRect2D scissor;
+		scissor.x = draw.clipx;
+		scissor.y = draw.clipy;
+		scissor.w = draw.clipw;
+		scissor.h = draw.cliph;
+		renderManager_.SetScissor(scissor);
+		renderManager_.DrawIndexed(curPipeline_->inputLayout->inputLayout_, vbuf, voffset, ibuf, ioffset + draw.indexOffset * indexSize, curPipeline_->prim, draw.indexCount, GL_UNSIGNED_SHORT, 1);
+	}
+}
+
+void OpenGLContext::Clear(Aspect aspects, uint32_t colorval, float depthVal, int stencilVal) {
 	float col[4];
 	Uint8x4ToFloat4(col, colorval);
 	GLuint glMask = 0;
-	if (mask & FBChannel::FB_COLOR_BIT) {
+	if (aspects & Aspect::COLOR_BIT) {
 		glMask |= GL_COLOR_BUFFER_BIT;
 	}
-	if (mask & FBChannel::FB_DEPTH_BIT) {
+	if (aspects & Aspect::DEPTH_BIT) {
 		glMask |= GL_DEPTH_BUFFER_BIT;
 	}
-	if (mask & FBChannel::FB_STENCIL_BIT) {
+	if (aspects & Aspect::STENCIL_BIT) {
 		glMask |= GL_STENCIL_BUFFER_BIT;
 	}
 	renderManager_.Clear(colorval, depthVal, stencilVal, glMask, 0xF, 0, 0, targetWidth_, targetHeight_);
@@ -1435,7 +1520,6 @@ void OpenGLInputLayout::Compile(const InputLayoutDesc &desc) {
 	stride = desc.stride;
 
 	std::vector<GLRInputLayout::Entry> entries;
-	entries.reserve(desc.attributes.size());
 	for (auto &attr : desc.attributes) {
 		GLRInputLayout::Entry entry;
 		entry.location = attr.location;
@@ -1463,7 +1547,7 @@ void OpenGLInputLayout::Compile(const InputLayoutDesc &desc) {
 			break;
 		case DataFormat::UNDEFINED:
 		default:
-			ERROR_LOG(G3D,  "Thin3DGLVertexFormat: Invalid or unknown component type applied.");
+			ERROR_LOG(Log::G3D,  "Thin3DGLVertexFormat: Invalid or unknown component type applied.");
 			break;
 		}
 
@@ -1497,55 +1581,55 @@ void OpenGLContext::BindFramebufferAsRenderTarget(Framebuffer *fbo, const Render
 	curRenderTarget_ = fb;
 }
 
-void OpenGLContext::CopyFramebufferImage(Framebuffer *fbsrc, int srcLevel, int srcX, int srcY, int srcZ, Framebuffer *fbdst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, int channelBits, const char *tag) {
+void OpenGLContext::CopyFramebufferImage(Framebuffer *fbsrc, int srcLevel, int srcX, int srcY, int srcZ, Framebuffer *fbdst, int dstLevel, int dstX, int dstY, int dstZ, int width, int height, int depth, Aspect aspects, const char *tag) {
 	OpenGLFramebuffer *src = (OpenGLFramebuffer *)fbsrc;
 	OpenGLFramebuffer *dst = (OpenGLFramebuffer *)fbdst;
 
-	int aspect = 0;
-	if (channelBits & FB_COLOR_BIT) {
-		aspect |= GL_COLOR_BUFFER_BIT;
-	} else if (channelBits & (FB_STENCIL_BIT | FB_DEPTH_BIT)) {
-		if (channelBits & FB_DEPTH_BIT)
-			aspect |= GL_DEPTH_BUFFER_BIT;
-		if (channelBits & FB_STENCIL_BIT)
-			aspect |= GL_STENCIL_BUFFER_BIT;
+	int glAspect = 0;
+	if (aspects & Aspect::COLOR_BIT) {
+		glAspect |= GL_COLOR_BUFFER_BIT;
+	} else if (aspects & (Aspect::STENCIL_BIT | Aspect::DEPTH_BIT)) {
+		if (aspects & Aspect::DEPTH_BIT)
+			glAspect |= GL_DEPTH_BUFFER_BIT;
+		if (aspects & Aspect::STENCIL_BIT)
+			glAspect |= GL_STENCIL_BUFFER_BIT;
 	}
-	renderManager_.CopyFramebuffer(src->framebuffer_, GLRect2D{ srcX, srcY, width, height }, dst->framebuffer_, GLOffset2D{ dstX, dstY }, aspect, tag);
+	renderManager_.CopyFramebuffer(src->framebuffer_, GLRect2D{ srcX, srcY, width, height }, dst->framebuffer_, GLOffset2D{ dstX, dstY }, glAspect, tag);
 }
 
-bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *fbdst, int dstX1, int dstY1, int dstX2, int dstY2, int channels, FBBlitFilter linearFilter, const char *tag) {
+bool OpenGLContext::BlitFramebuffer(Framebuffer *fbsrc, int srcX1, int srcY1, int srcX2, int srcY2, Framebuffer *fbdst, int dstX1, int dstY1, int dstX2, int dstY2, Aspect aspects, FBBlitFilter linearFilter, const char *tag) {
 	OpenGLFramebuffer *src = (OpenGLFramebuffer *)fbsrc;
 	OpenGLFramebuffer *dst = (OpenGLFramebuffer *)fbdst;
 	GLuint aspect = 0;
-	if (channels & FB_COLOR_BIT)
+	if (aspects & Aspect::COLOR_BIT)
 		aspect |= GL_COLOR_BUFFER_BIT;
-	if (channels & FB_DEPTH_BIT)
+	if (aspects & Aspect::DEPTH_BIT)
 		aspect |= GL_DEPTH_BUFFER_BIT;
-	if (channels & FB_STENCIL_BIT)
+	if (aspects & Aspect::STENCIL_BIT)
 		aspect |= GL_STENCIL_BUFFER_BIT;
 
 	renderManager_.BlitFramebuffer(src->framebuffer_, GLRect2D{ srcX1, srcY1, srcX2 - srcX1, srcY2 - srcY1 }, dst->framebuffer_, GLRect2D{ dstX1, dstY1, dstX2 - dstX1, dstY2 - dstY1 }, aspect, linearFilter == FB_BLIT_LINEAR, tag);
 	return true;
 }
 
-void OpenGLContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, FBChannel channelBit, int layer) {
+void OpenGLContext::BindFramebufferAsTexture(Framebuffer *fbo, int binding, Aspect aspects, int layer) {
 	OpenGLFramebuffer *fb = (OpenGLFramebuffer *)fbo;
 	_assert_(binding < MAX_TEXTURE_SLOTS);
 
-	GLuint aspect = 0;
-	if (channelBit & FB_COLOR_BIT) {
-		aspect |= GL_COLOR_BUFFER_BIT;
+	GLuint glAspect = 0;
+	if (aspects & Aspect::COLOR_BIT) {
+		glAspect |= GL_COLOR_BUFFER_BIT;
 		boundTextures_[binding] = &fb->framebuffer_->color_texture;
 	}
-	if (channelBit & FB_DEPTH_BIT) {
-		aspect |= GL_DEPTH_BUFFER_BIT;
+	if (aspects & Aspect::DEPTH_BIT) {
+		glAspect |= GL_DEPTH_BUFFER_BIT;
 		boundTextures_[binding] = &fb->framebuffer_->z_stencil_texture;
 	}
-	if (channelBit & FB_STENCIL_BIT) {
-		aspect |= GL_STENCIL_BUFFER_BIT;
+	if (aspects & Aspect::STENCIL_BIT) {
+		glAspect |= GL_STENCIL_BUFFER_BIT;
 		boundTextures_[binding] = &fb->framebuffer_->z_stencil_texture;
 	}
-	renderManager_.BindFramebufferAsTexture(fb->framebuffer_, binding, aspect);
+	renderManager_.BindFramebufferAsTexture(fb->framebuffer_, binding, glAspect);
 }
 
 void OpenGLContext::GetFramebufferDimensions(Framebuffer *fbo, int *w, int *h) {

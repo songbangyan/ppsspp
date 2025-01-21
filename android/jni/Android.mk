@@ -38,9 +38,46 @@ include $(BUILD_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/Locals.mk
 
-LOCAL_C_INCLUDES += \
-  $(LOCAL_PATH)/../../ext/cpu_features/include \
-  $(LOCAL_PATH)/../../ext/rcheevos/include
+LUA_FILES := \
+	$(SRC)/ext/lua/lapi.c \
+	$(SRC)/ext/lua/lauxlib.c \
+	$(SRC)/ext/lua/lbaselib.c \
+	$(SRC)/ext/lua/lcode.c \
+	$(SRC)/ext/lua/lcorolib.c \
+	$(SRC)/ext/lua/lctype.c \
+	$(SRC)/ext/lua/ldblib.c \
+	$(SRC)/ext/lua/ldebug.c \
+	$(SRC)/ext/lua/ldo.c \
+	$(SRC)/ext/lua/ldump.c \
+	$(SRC)/ext/lua/lfunc.c \
+	$(SRC)/ext/lua/lgc.c \
+	$(SRC)/ext/lua/linit.c \
+	$(SRC)/ext/lua/liolib.c \
+	$(SRC)/ext/lua/llex.c \
+	$(SRC)/ext/lua/lmathlib.c \
+	$(SRC)/ext/lua/lmem.c \
+	$(SRC)/ext/lua/loadlib.c \
+	$(SRC)/ext/lua/lobject.c \
+	$(SRC)/ext/lua/lopcodes.c \
+	$(SRC)/ext/lua/loslib.c \
+	$(SRC)/ext/lua/lparser.c \
+	$(SRC)/ext/lua/lstate.c \
+	$(SRC)/ext/lua/lstring.c \
+	$(SRC)/ext/lua/lstrlib.c \
+	$(SRC)/ext/lua/ltable.c \
+	$(SRC)/ext/lua/ltablib.c \
+	$(SRC)/ext/lua/ltm.c \
+	$(SRC)/ext/lua/lundump.c \
+	$(SRC)/ext/lua/lutf8lib.c \
+	$(SRC)/ext/lua/lvm.c \
+	$(SRC)/ext/lua/lzio.c
+
+LOCAL_MODULE := lua
+LOCAL_SRC_FILES := $(LUA_FILES)
+include $(BUILD_STATIC_LIBRARY)
+
+include $(CLEAR_VARS)
+include $(LOCAL_PATH)/Locals.mk
 
 LOCAL_CFLAGS += -DSTACK_LINE_READER_BUFFER_SIZE=1024 -DHAVE_DLFCN_H -DRC_DISABLE_LUA -D_7ZIP_ST
 
@@ -113,6 +150,20 @@ SPIRV_CROSS_FILES := \
 NAETT_FILES := \
   ${SRC}/ext/naett/naett.c
 
+MINIMP3_FILES := \
+    ${SRC}/ext/minimp3/minimp3.cpp
+
+AT3_STANDALONE_FILES := \
+	${SRC}/ext/at3_standalone/atrac.cpp \
+	${SRC}/ext/at3_standalone/atrac3.cpp \
+	${SRC}/ext/at3_standalone/atrac3plus.cpp \
+	${SRC}/ext/at3_standalone/atrac3plusdec.cpp \
+	${SRC}/ext/at3_standalone/atrac3plusdsp.cpp \
+	${SRC}/ext/at3_standalone/get_bits.cpp \
+	${SRC}/ext/at3_standalone/compat.cpp \
+	${SRC}/ext/at3_standalone/fft.cpp \
+	${SRC}/ext/at3_standalone/mem.cpp
+
 RCHEEVOS_FILES := \
   ${SRC}/ext/rcheevos/src/rapi/rc_api_common.c \
   ${SRC}/ext/rcheevos/src/rapi/rc_api_editor.c \
@@ -136,8 +187,6 @@ RCHEEVOS_FILES := \
   ${SRC}/ext/rcheevos/src/rcheevos/runtime_progress.c \
   ${SRC}/ext/rcheevos/src/rcheevos/trigger.c \
   ${SRC}/ext/rcheevos/src/rcheevos/value.c \
-  ${SRC}/ext/rcheevos/src/rhash/cdreader.c \
-  ${SRC}/ext/rcheevos/src/rhash/hash.c \
   ${SRC}/ext/rcheevos/src/rhash/md5.c
 
 ifeq ($(TARGET_ARCH_ABI),arm64-v8a)
@@ -178,6 +227,13 @@ EXT_FILES := \
   $(SRC)/ext/libpng17/pngwtran.c \
   $(SRC)/ext/libpng17/pngwutil.c \
   $(SRC)/ext/basis_universal/basisu_transcoder.cpp \
+  $(SRC)/ext/imgui/imgui.cpp \
+  $(SRC)/ext/imgui/imgui_demo.cpp \
+  $(SRC)/ext/imgui/imgui_draw.cpp \
+  $(SRC)/ext/imgui/imgui_impl_thin3d.cpp \
+  $(SRC)/ext/imgui/imgui_impl_platform.cpp \
+  $(SRC)/ext/imgui/imgui_tables.cpp \
+  $(SRC)/ext/imgui/imgui_widgets.cpp \
   $(SRC)/ext/jpge/jpgd.cpp \
   $(SRC)/ext/jpge/jpge.cpp \
   $(SRC)/ext/sha1/sha1.cpp \
@@ -223,6 +279,8 @@ EXEC_AND_LIB_FILES := \
   $(SPIRV_CROSS_FILES) \
   $(RCHEEVOS_FILES) \
   $(NAETT_FILES) \
+  $(MINIMP3_FILES) \
+  $(AT3_STANDALONE_FILES) \
   $(EXT_FILES) \
   $(NATIVE_FILES) \
   $(SRC)/Common/Buffer.cpp \
@@ -315,8 +373,9 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Common/CPUDetect.cpp \
   $(SRC)/Common/ExceptionHandlerSetup.cpp \
   $(SRC)/Common/FakeCPUDetect.cpp \
+  $(SRC)/Common/GhidraClient.cpp \
   $(SRC)/Common/Log.cpp \
-  $(SRC)/Common/LogManager.cpp \
+  $(SRC)/Common/Log/LogManager.cpp \
   $(SRC)/Common/LogReporting.cpp \
   $(SRC)/Common/MemArenaAndroid.cpp \
   $(SRC)/Common/MemArenaDarwin.cpp \
@@ -339,7 +398,7 @@ include $(BUILD_STATIC_LIBRARY)
 # Next up, Core, GPU, and other core parts shared by headless.
 include $(CLEAR_VARS)
 include $(LOCAL_PATH)/Locals.mk
-LOCAL_WHOLE_STATIC_LIBRARIES += ppsspp_common libchdr
+LOCAL_WHOLE_STATIC_LIBRARIES += ppsspp_common libchdr lua
 
 ifeq ($(TARGET_ARCH_ABI),x86_64)
 ARCH_FILES := \
@@ -437,6 +496,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/MIPS/MIPSVFPUFallbacks.cpp.arm \
   $(SRC)/Core/MIPS/MIPSCodeUtils.cpp.arm \
   $(SRC)/Core/MIPS/MIPSDebugInterface.cpp \
+  $(SRC)/Core/MIPS/MIPSTracer.cpp \
   $(SRC)/Core/MIPS/IR/IRAnalysis.cpp \
   $(SRC)/Core/MIPS/IR/IRFrontend.cpp \
   $(SRC)/Core/MIPS/IR/IRJit.cpp \
@@ -470,7 +530,9 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/Common/SoftwareTransformCommon.cpp.arm \
   $(SRC)/GPU/Common/ReinterpretFramebuffer.cpp \
   $(SRC)/GPU/Common/DepthBufferCommon.cpp \
+  $(SRC)/GPU/Common/DepthRaster.cpp \
   $(SRC)/GPU/Common/VertexDecoderCommon.cpp.arm \
+  $(SRC)/GPU/Common/VertexDecoderHandwritten.cpp.arm \
   $(SRC)/GPU/Common/TextureCacheCommon.cpp.arm \
   $(SRC)/GPU/Common/TextureScalerCommon.cpp.arm \
   $(SRC)/GPU/Common/ShaderCommon.cpp \
@@ -490,6 +552,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/GPU/Debugger/GECommandTable.cpp \
   $(SRC)/GPU/Debugger/Playback.cpp \
   $(SRC)/GPU/Debugger/Record.cpp \
+  $(SRC)/GPU/Debugger/State.cpp \
   $(SRC)/GPU/Debugger/Stepping.cpp \
   $(SRC)/GPU/GLES/FramebufferManagerGLES.cpp \
   $(SRC)/GPU/GLES/StencilBufferGLES.cpp \
@@ -515,6 +578,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/ELF/PrxDecrypter.cpp \
   $(SRC)/Core/ELF/ParamSFO.cpp \
   $(SRC)/Core/HW/SimpleAudioDec.cpp \
+  $(SRC)/Core/HW/Atrac3Standalone.cpp \
   $(SRC)/Core/HW/AsyncIOManager.cpp \
   $(SRC)/Core/HW/BufferQueue.cpp \
   $(SRC)/Core/HW/Camera.cpp \
@@ -587,6 +651,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/Dialog/PSPNetconfDialog.cpp \
   $(SRC)/Core/Dialog/PSPNpSigninDialog.cpp \
   $(SRC)/Core/Dialog/PSPOskDialog.cpp \
+  $(SRC)/Core/Dialog/PSPOskConstants.cpp \
   $(SRC)/Core/Dialog/PSPScreenshotDialog.cpp \
   $(SRC)/Core/Dialog/PSPPlaceholderDialog.cpp \
   $(SRC)/Core/Dialog/PSPSaveDialog.cpp \
@@ -597,9 +662,13 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/HLE/ReplaceTables.cpp \
   $(SRC)/Core/HLE/HLE.cpp \
   $(SRC)/Core/HLE/KUBridge.cpp \
+  $(SRC)/Core/HLE/NetInetConstants.cpp \
+  $(SRC)/Core/HLE/SocketManager.cpp \
   $(SRC)/Core/HLE/Plugins.cpp \
   $(SRC)/Core/HLE/sceAdler.cpp \
   $(SRC)/Core/HLE/sceAtrac.cpp \
+  $(SRC)/Core/HLE/AtracCtx.cpp \
+  $(SRC)/Core/HLE/AtracCtx2.cpp \
   $(SRC)/Core/HLE/__sceAudio.cpp.arm \
   $(SRC)/Core/HLE/sceAudio.cpp.arm \
   $(SRC)/Core/HLE/sceAudiocodec.cpp.arm \
@@ -641,6 +710,10 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/HLE/proAdhoc.cpp \
   $(SRC)/Core/HLE/proAdhocServer.cpp \
   $(SRC)/Core/HLE/sceNetAdhoc.cpp \
+  $(SRC)/Core/HLE/sceNetAdhocMatching.cpp \
+  $(SRC)/Core/HLE/sceNetApctl.cpp \
+  $(SRC)/Core/HLE/sceNetInet.cpp \
+  $(SRC)/Core/HLE/sceNetResolver.cpp \
   $(SRC)/Core/HLE/sceOpenPSID.cpp \
   $(SRC)/Core/HLE/sceP3da.cpp \
   $(SRC)/Core/HLE/sceMt19937.cpp \
@@ -652,6 +725,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/HLE/sceSas.cpp \
   $(SRC)/Core/HLE/sceSfmt19937.cpp \
   $(SRC)/Core/HLE/sceSha256.cpp \
+  $(SRC)/Core/HLE/sceSircs.cpp \
   $(SRC)/Core/HLE/sceSsl.cpp \
   $(SRC)/Core/HLE/sceUmd.cpp \
   $(SRC)/Core/HLE/sceUsb.cpp \
@@ -678,6 +752,7 @@ EXEC_AND_LIB_FILES := \
   $(SRC)/Core/MIPS/JitCommon/JitBlockCache.cpp \
   $(SRC)/Core/MIPS/JitCommon/JitState.cpp \
   $(SRC)/Core/Util/AudioFormat.cpp \
+  $(SRC)/Core/Util/MemStick.cpp \
   $(SRC)/Core/Util/PortManager.cpp \
   $(SRC)/Core/Util/GameDB.cpp \
   $(SRC)/Core/Util/GameManager.cpp \
@@ -809,12 +884,18 @@ LOCAL_SRC_FILES := \
   $(SRC)/android/jni/AndroidVulkanContext.cpp \
   $(SRC)/android/jni/AndroidAudio.cpp \
   $(SRC)/android/jni/OpenSLContext.cpp \
+  $(SRC)/UI/ImDebugger/ImDebugger.cpp \
+  $(SRC)/UI/ImDebugger/ImGe.cpp \
+  $(SRC)/UI/ImDebugger/ImDisasmView.cpp \
+  $(SRC)/UI/ImDebugger/ImMemView.cpp \
+  $(SRC)/UI/ImDebugger/ImStructViewer.cpp \
   $(SRC)/UI/AudioCommon.cpp \
   $(SRC)/UI/BackgroundAudio.cpp \
   $(SRC)/UI/DiscordIntegration.cpp \
   $(SRC)/UI/ChatScreen.cpp \
   $(SRC)/UI/DebugOverlay.cpp \
   $(SRC)/UI/DevScreens.cpp \
+  $(SRC)/UI/DriverManagerScreen.cpp \
   $(SRC)/UI/DisplayLayoutScreen.cpp \
   $(SRC)/UI/EmuScreen.cpp \
   $(SRC)/UI/MainScreen.cpp \
@@ -838,6 +919,7 @@ LOCAL_SRC_FILES := \
   $(SRC)/UI/TouchControlVisibilityScreen.cpp \
   $(SRC)/UI/CwCheatScreen.cpp \
   $(SRC)/UI/InstallZipScreen.cpp \
+  $(SRC)/UI/JitCompareScreen.cpp \
   $(SRC)/UI/OnScreenDisplay.cpp \
   $(SRC)/UI/ProfilerDraw.cpp \
   $(SRC)/UI/NativeApp.cpp \

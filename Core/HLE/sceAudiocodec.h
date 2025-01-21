@@ -17,6 +17,10 @@
 
 #pragma once
 
+#include <map>
+
+class PointerWrap;
+
 typedef struct {
 	s32_le unk0;
 	s32_le unk4;
@@ -59,3 +63,6 @@ void __AudioCodecInit();
 void __AudioCodecShutdown();
 void Register_sceAudiocodec();
 void __sceAudiocodecDoState(PointerWrap &p);
+
+class AudioDecoder;
+extern std::map<u32, AudioDecoder *> g_audioDecoderContexts;

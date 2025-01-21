@@ -147,11 +147,7 @@ void DisplayLayoutScreen::dialogFinished(const Screen *dialog, DialogResult resu
 	RecreateViews();
 }
 
-UI::EventReturn DisplayLayoutScreen::OnPostProcShaderChange(UI::EventParams &e) {
-	// Remove the virtual "Off" entry. TODO: Get rid of it generally.
-	g_Config.vPostShaderNames.erase(std::remove(g_Config.vPostShaderNames.begin(), g_Config.vPostShaderNames.end(), "Off"), g_Config.vPostShaderNames.end());
-	FixPostShaderOrder(&g_Config.vPostShaderNames);
-
+static void NotifyPostChanges() {
 	System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
 	System_PostUIMessage(UIMessage::GPU_RENDER_RESIZED);  // To deal with shaders that can change render resolution like upscaling.
 	System_PostUIMessage(UIMessage::POSTSHADER_UPDATED);
@@ -159,22 +155,29 @@ UI::EventReturn DisplayLayoutScreen::OnPostProcShaderChange(UI::EventParams &e) 
 	if (gpu) {
 		gpu->NotifyConfigChanged();
 	}
+}
+
+UI::EventReturn DisplayLayoutScreen::OnPostProcShaderChange(UI::EventParams &e) {
+	// Remove the virtual "Off" entry. TODO: Get rid of it generally.
+	g_Config.vPostShaderNames.erase(std::remove(g_Config.vPostShaderNames.begin(), g_Config.vPostShaderNames.end(), "Off"), g_Config.vPostShaderNames.end());
+	FixPostShaderOrder(&g_Config.vPostShaderNames);
+	NotifyPostChanges();
 	return UI::EVENT_DONE;
 }
 
-static std::string PostShaderTranslateName(const char *value) {
-	if (!strcmp(value, "Off")) {
+static std::string PostShaderTranslateName(std::string_view value) {
+	if (value == "Off") {
 		auto gr = GetI18NCategory(I18NCat::GRAPHICS);
 		// Off is a legacy fake item (gonna migrate off it later).
-		return gr->T("Add postprocessing shader");
+		return std::string(gr->T("Add postprocessing shader"));
 	}
 
 	const ShaderInfo *info = GetPostShaderInfo(value);
 	if (info) {
 		auto ps = GetI18NCategory(I18NCat::POSTSHADERS);
-		return ps->T(value, info ? info->name.c_str() : value);
+		return std::string(ps->T(value, info->name));
 	} else {
-		return value;
+		return std::string(value);
 	}
 }
 
@@ -274,6 +277,7 @@ void DisplayLayoutScreen::CreateViews() {
 		rotation->SetEnabledFunc([] {
 			return !g_Config.bSkipBufferEffects || g_Config.bSoftwareRendering;
 		});
+		rotation->SetHideTitle(true);
 		rightColumn->Add(rotation);
 
 		Choice *center = new Choice(di->T("Reset"));
@@ -377,14 +381,23 @@ void DisplayLayoutScreen::CreateViews() {
 
 			auto removeButton = shaderRow->Add(new Choice(ImageID("I_TRASHCAN"), new LinearLayoutParams(0.0f)));
 			removeButton->OnClick.Add([=](EventParams &e) -> UI::EventReturn {
-				g_Config.vPostShaderNames.erase(g_Config.vPostShaderNames.begin() + i);
-				System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
-				RecreateViews();
+				// Protect against possible race conditions.
+				if (i < g_Config.vPostShaderNames.size()) {
+					g_Config.vPostShaderNames.erase(g_Config.vPostShaderNames.begin() + i);
+					FixPostShaderOrder(&g_Config.vPostShaderNames);
+					NotifyPostChanges();
+					RecreateViews();
+				}
 				return UI::EVENT_DONE;
 			});
 
 			auto moreButton = shaderRow->Add(new Choice(ImageID("I_THREE_DOTS"), new LinearLayoutParams(0.0f)));
 			moreButton->OnClick.Add([=](EventParams &e) -> UI::EventReturn {
+				if (i >= g_Config.vPostShaderNames.size()) {
+					// Protect against possible race conditions.
+					return UI::EVENT_DONE;
+				}
+
 				PopupContextMenuScreen *contextMenu = new UI::PopupContextMenuScreen(postShaderContextMenu, ARRAY_SIZE(postShaderContextMenu), I18NCat::DIALOG, moreButton);
 				screenManager()->push(contextMenu);
 				const ShaderInfo *info = GetPostShaderInfo(g_Config.vPostShaderNames[i]);
@@ -406,7 +419,7 @@ void DisplayLayoutScreen::CreateViews() {
 						return UI::EVENT_DONE;
 					}
 					FixPostShaderOrder(&g_Config.vPostShaderNames);
-					System_PostUIMessage(UIMessage::GPU_CONFIG_CHANGED);
+					NotifyPostChanges();
 					RecreateViews();
 					return UI::EVENT_DONE;
 				});
@@ -441,7 +454,7 @@ void DisplayLayoutScreen::CreateViews() {
 						value = setting.value;
 
 					if (duplicated) {
-						auto sliderName = StringFromFormat("%s %s", ps->T(setting.name), ps->T("(duplicated setting, previous slider will be used)"));
+						auto sliderName = StringFromFormat("%s %s", ps->T_cstr(setting.name.c_str()), ps->T_cstr("(duplicated setting, previous slider will be used)"));
 						PopupSliderChoiceFloat *settingValue = settingContainer->Add(new PopupSliderChoiceFloat(&value, setting.minValue, setting.maxValue, setting.value, sliderName, setting.step, screenManager()));
 						settingValue->SetEnabled(false);
 					} else {
@@ -475,7 +488,7 @@ void PostProcScreen::CreateViews() {
 			continue;
 		if (shaders_[i].section == selectedName)
 			selected = (int)indexTranslation_.size();
-		items.push_back(ps->T(shaders_[i].section.c_str(), shaders_[i].name.c_str()));
+		items.push_back(std::string(ps->T(shaders_[i].section.c_str(), shaders_[i].name.c_str())));
 		indexTranslation_.push_back(i);
 	}
 	adaptor_ = UI::StringVectorListAdaptor(items, selected);

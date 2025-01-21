@@ -11,7 +11,8 @@
 
 #if PPSSPP_PLATFORM(WINDOWS) && !PPSSPP_PLATFORM(UWP)
 
-#include <windows.h>
+#include "Common/CommonWindows.h"
+
 typedef CONTEXT SContext;
 
 #if defined(__LIBRETRO__)
@@ -106,7 +107,7 @@ typedef x86_thread_state64_t SContext;
 
 #elif defined(__linux__)
 
-#include <signal.h>
+#include <csignal>
 
 #if PPSSPP_ARCH(AMD64)
 

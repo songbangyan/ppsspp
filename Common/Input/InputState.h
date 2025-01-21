@@ -32,7 +32,6 @@ enum InputDeviceID {
 	DEVICE_ID_XINPUT_2 = 22,
 	DEVICE_ID_XINPUT_3 = 23,
 	DEVICE_ID_ACCELEROMETER = 30,  // no longer used
-	DEVICE_ID_XR_HMD = 39,
 	DEVICE_ID_XR_CONTROLLER_LEFT = 40,
 	DEVICE_ID_XR_CONTROLLER_RIGHT = 41,
 	DEVICE_ID_TOUCH = 42,
@@ -67,7 +66,7 @@ inline int TranslateKeyCodeToAxis(int keyCode, int *direction) {
 
 class InputMapping {
 private:
-	inline int TranslateKeyCodeFromAxis(int axisId, int direction) {
+	static inline int TranslateKeyCodeFromAxis(int axisId, int direction) {
 		return AXIS_BIND_NKCODE_START + axisId * 2 + (direction < 0 ? 1 : 0);
 	}
 public:
@@ -135,8 +134,9 @@ enum {
 	TOUCH_UP = 1 << 2,
 	TOUCH_CANCEL = 1 << 3,  // Sent by scrollviews to their children when they detect a scroll
 	TOUCH_WHEEL = 1 << 4,  // Scrollwheel event. Usually only affects Y but can potentially affect X.
-	TOUCH_MOUSE = 1 << 5,  // Identifies that this touch event came from a mouse
+	TOUCH_MOUSE = 1 << 5,  // Identifies that this touch event came from a mouse. Id is now set to the mouse button for DOWN/UP commands.
 	TOUCH_RELEASE_ALL = 1 << 6,  // Useful for app focus switches when events may be lost.
+	TOUCH_HOVER = 1 << 7,
 
 	// These are the Android getToolType() codes, shifted by 10.
 	TOUCH_TOOL_MASK = 7 << 10,
@@ -154,6 +154,7 @@ struct TouchInput {
 	float x;
 	float y;
 	int id; // Needs to be <= GestureDetector::MAX_PTRS (10.)
+	int buttons;  // bit mask
 	int flags;
 	double timestamp;
 };
@@ -179,6 +180,11 @@ struct KeyInput {
 		int unicodeChar;  // for KEY_CHAR
 	};
 	int flags;
+
+	// Used by mousewheel events. The delta is packed in the upper 16 bits of flags.
+	int Delta() const {
+		return flags >> 16;
+	}
 };
 
 struct AxisInput {

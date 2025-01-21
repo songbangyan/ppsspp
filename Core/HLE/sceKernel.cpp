@@ -16,7 +16,9 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "Common/Serialize/SerializeFuncs.h"
-#include "Common/LogManager.h"
+#include "Common/Log/LogManager.h"
+#include "Common/System/OSD.h"
+
 #include "Core/Core.h"
 #include "Core/Config.h"
 #include "Core/CwCheat.h"
@@ -35,7 +37,7 @@
 #include "Core/Reporting.h"
 #include "Core/SaveState.h"
 #include "Core/System.h"
-#include "GPU/GPUInterface.h"
+#include "GPU/GPUCommon.h"
 #include "GPU/GPUState.h"
 
 #include "__sceAudio.h"
@@ -67,6 +69,7 @@
 #include "sceMpeg.h"
 #include "sceNet.h"
 #include "sceNetAdhoc.h"
+#include "sceNetAdhocMatching.h"
 #include "scePower.h"
 #include "sceUtility.h"
 #include "sceUmd.h"
@@ -85,7 +88,9 @@
 #include "sceDmac.h"
 #include "sceMp4.h"
 #include "sceOpenPSID.h"
+#include "sceHttp.h"
 #include "Core/Util/PPGeDraw.h"
+#include "sceHttp.h"
 
 /*
 17: [MIPS32 R4K 00000000 ]: Loader: Type: 1 Vaddr: 00000000 Filesz: 2856816 Memsz: 2856816 
@@ -98,15 +103,17 @@ static bool kernelRunning = false;
 KernelObjectPool kernelObjects;
 KernelStats kernelStats;
 u32 registeredExitCbId;
+u32 g_GPOBits;  // Really just 8 bits on the real hardware.
+u32 g_GPIBits;  // Really just 8 bits on the real hardware.
 
 void __KernelInit()
 {
 	if (kernelRunning)
 	{
-		ERROR_LOG(SCEKERNEL, "Can't init kernel when kernel is running");
+		ERROR_LOG(Log::sceKernel, "Can't init kernel when kernel is running");
 		return;
 	}
-	INFO_LOG(SCEKERNEL, "Initializing kernel...");
+	INFO_LOG(Log::sceKernel, "Initializing kernel...");
 
 	__KernelTimeInit();
 	__InterruptsInit();
@@ -122,6 +129,7 @@ void __KernelInit()
 	__IoInit();
 	__JpegInit();
 	__AudioInit();
+	__Mp3Init();
 	__SasInit();
 	__AtracInit();
 	__CccInit();
@@ -140,6 +148,7 @@ void __KernelInit()
 	__FontInit();
 	__NetInit();
 	__NetAdhocInit();
+	__NetAdhocMatchingInit();
 	__VaudioInit();
 	__CheatInit();
 	__HeapInit();
@@ -150,6 +159,7 @@ void __KernelInit()
 	__UsbCamInit();
 	__UsbMicInit();
 	__OpenPSIDInit();
+	__HttpInit();
 	
 	SaveState::Init();  // Must be after IO, as it may create a directory
 	Reporting::Init();
@@ -158,21 +168,23 @@ void __KernelInit()
 	__PPGeInit();
 
 	kernelRunning = true;
-	INFO_LOG(SCEKERNEL, "Kernel initialized.");
+	g_GPOBits = 0;
+	INFO_LOG(Log::sceKernel, "Kernel initialized.");
 }
 
 void __KernelShutdown()
 {
 	if (!kernelRunning)
 	{
-		ERROR_LOG(SCEKERNEL, "Can't shut down kernel - not running");
+		ERROR_LOG(Log::sceKernel, "Can't shut down kernel - not running");
 		return;
 	}
 	kernelObjects.List();
-	INFO_LOG(SCEKERNEL, "Shutting down kernel - %i kernel objects alive", kernelObjects.GetCount());
+	INFO_LOG(Log::sceKernel, "Shutting down kernel - %i kernel objects alive", kernelObjects.GetCount());
 	hleCurrentThreadName = NULL;
 	kernelObjects.Clear();
 
+	__HttpShutdown();
 	__OpenPSIDShutdown();
 	__UsbCamShutdown();
 	__UsbMicShutdown();
@@ -182,6 +194,7 @@ void __KernelShutdown()
 	__VideoPmpShutdown();
 	__AACShutdown();
 	__NetAdhocShutdown();
+	__NetAdhocMatchingShutdown();
 	__NetShutdown();
 	__FontShutdown();
 
@@ -198,6 +211,7 @@ void __KernelShutdown()
 	__AtracShutdown();
 	__AudioShutdown();
 	__IoShutdown();
+	__HeapShutdown();
 	__KernelMutexShutdown();
 	__KernelThreadingShutdown();
 	__KernelMemoryShutdown();
@@ -311,16 +325,20 @@ std::string __KernelStateSummary() {
 
 void sceKernelExitGame()
 {
-	INFO_LOG(SCEKERNEL, "sceKernelExitGame");
+	INFO_LOG(Log::sceKernel, "sceKernelExitGame");
 	__KernelSwitchOffThread("game exited");
 	Core_Stop();
+
+	g_OSD.Show(OSDType::MESSAGE_INFO, "sceKernelExitGame()", 0.0f, "kernelexit");
 }
 
 void sceKernelExitGameWithStatus()
 {
-	INFO_LOG(SCEKERNEL, "sceKernelExitGameWithStatus");
+	INFO_LOG(Log::sceKernel, "sceKernelExitGameWithStatus");
 	__KernelSwitchOffThread("game exited");
 	Core_Stop();
+
+	g_OSD.Show(OSDType::MESSAGE_INFO, "sceKernelExitGameWithStatus()");
 }
 
 u32 sceKernelDevkitVersion()
@@ -331,34 +349,29 @@ u32 sceKernelDevkitVersion()
 	int revision = firmwareVersion % 10;
 	int devkitVersion = (major << 24) | (minor << 16) | (revision << 8) | 0x10;
 
-	DEBUG_LOG(SCEKERNEL, "%08x=sceKernelDevkitVersion()", devkitVersion);
-	return devkitVersion;
+	return hleLogDebug(Log::sceKernel, devkitVersion, "%d.%d.%d", major, minor, revision);
 }
 
-u32 sceKernelRegisterKprintfHandler()
-{
-	ERROR_LOG(SCEKERNEL, "UNIMPL sceKernelRegisterKprintfHandler()");
-	return 0;
+u32 sceKernelRegisterKprintfHandler() {
+	return hleLogError(Log::sceKernel, 0, "UNIMPL");
 }
 
-int sceKernelRegisterDefaultExceptionHandler()
-{
-	ERROR_LOG(SCEKERNEL, "UNIMPL sceKernelRegisterDefaultExceptionHandler()");
-	return 0;
+int sceKernelRegisterDefaultExceptionHandler() {
+	return hleLogError(Log::sceKernel, 0, "UNIMPL");
 }
 
-void sceKernelSetGPO(u32 ledAddr)
+void sceKernelSetGPO(u32 ledBits)
 {
-	// Sets debug LEDs.
-	// Not really interesting, and a few games really spam it
-	// DEBUG_LOG(SCEKERNEL, "sceKernelSetGPO(%02x)", ledAddr);
+	// Sets debug LEDs. Some games do interesting stuff with this, like a metronome in Parappa.
+	// Shows up as a vertical strip of LEDs at the side of the screen, if enabled.
+	g_GPOBits = ledBits;
 }
 
 u32 sceKernelGetGPI()
 {
 	// Always returns 0 on production systems.
-	DEBUG_LOG(SCEKERNEL, "0=sceKernelGetGPI()");
-	return 0;
+	// On developer systems, there are 8 switches that control the lower 8 bits of the return value.
+	return hleLogDebug(Log::sceKernel, g_GPIBits);
 }
 
 // #define LOG_CACHE
@@ -370,34 +383,33 @@ u32 sceKernelGetGPI()
 int sceKernelDcacheInvalidateRange(u32 addr, int size)
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU,"sceKernelDcacheInvalidateRange(%08x, %i)", addr, size);
+	NOTICE_LOG(Log::CPU,"sceKernelDcacheInvalidateRange(%08x, %i)", addr, size);
 #endif
 	if (size < 0 || (int) addr + size < 0)
-		return SCE_KERNEL_ERROR_ILLEGAL_ADDR;
+		return hleNoLog(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
 
 	if (size > 0)
 	{
 		if ((addr % 64) != 0 || (size % 64) != 0)
-			return SCE_KERNEL_ERROR_CACHE_ALIGNMENT;
+			return hleNoLog(SCE_KERNEL_ERROR_CACHE_ALIGNMENT);
 
 		if (addr != 0)
 			gpu->InvalidateCache(addr, size, GPU_INVALIDATE_HINT);
 	}
 	hleEatCycles(190);
-	return 0;
+	return hleNoLog(0);
 }
 
 int sceKernelIcacheInvalidateRange(u32 addr, int size) {
-	DEBUG_LOG(CPU, "sceKernelIcacheInvalidateRange(%08x, %i)", addr, size);
 	if (size != 0)
 		currentMIPS->InvalidateICache(addr, size);
-	return 0;
+	return hleLogDebug(Log::CPU, 0);
 }
 
 int sceKernelDcacheWritebackAll()
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU,"sceKernelDcacheWritebackAll()");
+	NOTICE_LOG(Log::CPU,"sceKernelDcacheWritebackAll()");
 #endif
 	// Some games seem to use this a lot, it doesn't make sense
 	// to zap the whole texture cache.
@@ -410,7 +422,7 @@ int sceKernelDcacheWritebackAll()
 int sceKernelDcacheWritebackRange(u32 addr, int size)
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU,"sceKernelDcacheWritebackRange(%08x, %i)", addr, size);
+	NOTICE_LOG(Log::CPU,"sceKernelDcacheWritebackRange(%08x, %i)", addr, size);
 #endif
 	if (size < 0)
 		return SCE_KERNEL_ERROR_INVALID_SIZE;
@@ -425,7 +437,7 @@ int sceKernelDcacheWritebackRange(u32 addr, int size)
 int sceKernelDcacheWritebackInvalidateRange(u32 addr, int size)
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU,"sceKernelDcacheInvalidateRange(%08x, %i)", addr, size);
+	NOTICE_LOG(Log::CPU,"sceKernelDcacheInvalidateRange(%08x, %i)", addr, size);
 #endif
 	if (size < 0)
 		return SCE_KERNEL_ERROR_INVALID_SIZE;
@@ -440,37 +452,35 @@ int sceKernelDcacheWritebackInvalidateRange(u32 addr, int size)
 int sceKernelDcacheWritebackInvalidateAll()
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU,"sceKernelDcacheInvalidateAll()");
+	NOTICE_LOG(Log::CPU,"sceKernelDcacheInvalidateAll()");
 #endif
 	gpu->InvalidateCache(0, -1, GPU_INVALIDATE_ALL);
 	hleEatCycles(1165);
 	hleReSchedule("dcache invalidate all");
-	return 0;
+	return hleLogDebug(Log::CPU, 0, "Dcache invalidated");
 }
 
 u32 sceKernelIcacheInvalidateAll()
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU, "Icache invalidated - should clear JIT someday");
+	NOTICE_LOG(Log::CPU, "Icache invalidated - should clear JIT someday");
 #endif
 	// Note that this doesn't actually fully invalidate all with such a large range.
 	currentMIPS->InvalidateICache(0, 0x3FFFFFFF);
-	return 0;
+	return hleLogDebug(Log::CPU, 0, "Icache invalidated");
 }
 
 u32 sceKernelIcacheClearAll()
 {
 #ifdef LOG_CACHE
-	NOTICE_LOG(CPU, "Icache cleared - should clear JIT someday");
+	NOTICE_LOG(Log::CPU, "Icache cleared - should clear JIT someday");
 #endif
-	DEBUG_LOG(CPU, "Icache cleared - should clear JIT someday");
 	// Note that this doesn't actually fully invalidate all with such a large range.
 	currentMIPS->InvalidateICache(0, 0x3FFFFFFF);
-	return 0;
+	return hleLogDebug(Log::CPU, 0, "Icache cleared");
 }
 
-void KernelObject::GetQuickInfo(char *ptr, int size)
-{
+void KernelObject::GetQuickInfo(char *ptr, int size) {
 	strcpy(ptr, "-");
 }
 
@@ -494,16 +504,8 @@ SceUID KernelObjectPool::Create(KernelObject *obj, int rangeBottom, int rangeTop
 		}
 	}
 
-	ERROR_LOG_REPORT(SCEKERNEL, "Unable to allocate kernel object, too many objects slots in use.");
+	ERROR_LOG_REPORT(Log::sceKernel, "Unable to allocate kernel object, too many objects slots in use.");
 	return 0;
-}
-
-bool KernelObjectPool::IsValid(SceUID handle) const {
-	int index = handle - handleOffset;
-	if (index < 0 || index >= maxCount)
-		return false;
-	else
-		return occupied[index];
 }
 
 void KernelObjectPool::Clear() {
@@ -523,9 +525,9 @@ void KernelObjectPool::List() {
 			char buffer[256];
 			if (pool[i]) {
 				pool[i]->GetQuickInfo(buffer, sizeof(buffer));
-				DEBUG_LOG(SCEKERNEL, "KO %i: %s \"%s\": %s", i + handleOffset, pool[i]->GetTypeName(), pool[i]->GetName(), buffer);
+				DEBUG_LOG(Log::sceKernel, "KO %i: %s \"%s\": %s", i + handleOffset, pool[i]->GetTypeName(), pool[i]->GetName(), buffer);
 			} else {
-				ERROR_LOG(SCEKERNEL, "KO %i: bad object", i + handleOffset);
+				ERROR_LOG(Log::sceKernel, "KO %i: bad object", i + handleOffset);
 			}
 		}
 	}
@@ -550,7 +552,7 @@ void KernelObjectPool::DoState(PointerWrap &p) {
 
 	if (_maxCount != maxCount) {
 		p.SetError(p.ERROR_FAILURE);
-		ERROR_LOG(SCEKERNEL, "Unable to load state: different kernel object storage.");
+		ERROR_LOG(Log::sceKernel, "Unable to load state: different kernel object storage.");
 		return;
 	}
 
@@ -627,7 +629,7 @@ KernelObject *KernelObjectPool::CreateByIDType(int type) {
 		return __KernelThreadEventHandlerObject();
 
 	default:
-		ERROR_LOG(SAVESTATE, "Unable to load state: could not find object type %d.", type);
+		ERROR_LOG(Log::SaveState, "Unable to load state: could not find object type %d.", type);
 		return NULL;
 	}
 }
@@ -643,7 +645,7 @@ struct SystemStatus {
 };
 
 static int sceKernelReferSystemStatus(u32 statusPtr) {
-	DEBUG_LOG(SCEKERNEL, "sceKernelReferSystemStatus(%08x)", statusPtr);
+	DEBUG_LOG(Log::sceKernel, "sceKernelReferSystemStatus(%08x)", statusPtr);
 	auto status = PSPPointer<SystemStatus>::Create(statusPtr);
 	if (status.IsValid()) {
 		memset((SystemStatus *)status, 0, sizeof(SystemStatus));
@@ -682,16 +684,14 @@ static u32 sceKernelReferThreadProfiler() {
 	// This seems to simply has no parameter:
 	// https://pspdev.github.io/pspsdk/group__ThreadMan.html#ga8fd30da51b9dc0507ac4dae04a7e4a17
 	// In testing it just returns null in around 140-150 cycles.  See issue #17623.
-	DEBUG_LOG(SCEKERNEL, "0=sceKernelReferThreadProfiler()");
 	hleEatCycles(140);
-	return 0;
+	return hleLogDebug(Log::sceKernel, 0);
 }
 
 static int sceKernelReferGlobalProfiler() {
-	DEBUG_LOG(SCEKERNEL, "0=sceKernelReferGlobalProfiler()");
 	// See sceKernelReferThreadProfiler(), similar.
 	hleEatCycles(140);
-	return 0;
+	return hleLogDebug(Log::sceKernel, 0);
 }
 
 const HLEFunction ThreadManForUser[] =

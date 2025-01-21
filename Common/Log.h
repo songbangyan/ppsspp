@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "ppsspp_config.h"
 #include "CommonFuncs.h"
 
 #define	NOTICE_LEVEL  1  // VERY important information that is NOT errors. Like startup and debugprintfs from the game itself.
@@ -27,41 +28,43 @@
 #define	VERBOSE_LEVEL 6  // Noisy debugging - sometimes needed but usually unimportant.
 
 // NOTE: Needs to be kept in sync with the g_logTypeNames array.
-enum class LogType {
-	SYSTEM = 0,  // Catch-all for uncategorized things
-	BOOT,
-	COMMON,
+enum class Log {
+	System = 0,  // Catch-all for uncategorized things
+	Boot,
+	Common,
 	CPU,
-	FILESYS,
+	FileSystem,
 	G3D,
-	HLE,  // dumping ground that we should get rid of
+	HLE,
 	JIT,
-	LOADER,
+	Loader,
 	ME,
-	MEMMAP,
-	SASMIX,
-	SAVESTATE,
-	FRAMEBUF,
-	AUDIO,
+	MemMap,
+	SasMix,
+	SaveState,
+	FrameBuf,
+	Audio,
 	IO,
-	ACHIEVEMENTS,
+	Achievements,
 	HTTP,
-	PRINTF,
+	Printf,
+	TexReplacement,
+	GeDebugger,
 
-	SCEAUDIO,
-	SCECTRL,
-	SCEDISPLAY,
-	SCEFONT,
-	SCEGE,
-	SCEINTC,
-	SCEIO,
-	SCEKERNEL,
-	SCEMODULE,
-	SCENET,
-	SCERTC,
-	SCESAS,
-	SCEUTILITY,
-	SCEMISC,
+	sceAudio,
+	sceCtrl,
+	sceDisplay,
+	sceFont,
+	sceGe,
+	sceIntc,
+	sceIo,
+	sceKernel,
+	sceModule,
+	sceNet,
+	sceRtc,
+	sceSas,
+	sceUtility,
+	sceMisc,
 
 	NUMBER_OF_LOGS,  // Must be last
 };
@@ -75,16 +78,15 @@ enum class LogLevel : int {
 	LVERBOSE = VERBOSE_LEVEL,
 };
 
-void GenericLog(LogLevel level, LogType type,
-		const char *file, int line, const char *fmt, ...)
+void GenericLog(LogLevel level, Log type, const char *file, int line, const char *fmt, ...)
 #ifdef __GNUC__
 		__attribute__((format(printf, 5, 6)))
 #endif
 		;
-bool GenericLogEnabled(LogLevel level, LogType type);
+bool GenericLogEnabled(LogLevel level, Log type);
 
-// Exception for Windows - enable more log levels in release mode than on other platforms.
-#if defined(_DEBUG) || defined(_WIN32)
+// We only disable DEBUG and VERBOSE on Android/iOS now.
+#if defined(_DEBUG) || (!PPSSPP_PLATFORM(ANDROID) && !PPSSPP_PLATFORM(IOS))
 
 // Needs to be an int (and not use the enum) because it's used by the preprocessor!
 #define MAX_LOGLEVEL DEBUG_LEVEL
@@ -104,12 +106,12 @@ bool GenericLogEnabled(LogLevel level, LogType type);
 		GenericLog(v, t, __FILE__, __LINE__, __VA_ARGS__); \
 	}
 
-#define ERROR_LOG(t,...)   do { GENERIC_LOG(LogType::t, LogLevel::LERROR,   __VA_ARGS__) } while (false)
-#define WARN_LOG(t,...)    do { GENERIC_LOG(LogType::t, LogLevel::LWARNING, __VA_ARGS__) } while (false)
-#define NOTICE_LOG(t,...)  do { GENERIC_LOG(LogType::t, LogLevel::LNOTICE,  __VA_ARGS__) } while (false)
-#define INFO_LOG(t,...)    do { GENERIC_LOG(LogType::t, LogLevel::LINFO,    __VA_ARGS__) } while (false)
-#define DEBUG_LOG(t,...)   do { GENERIC_LOG(LogType::t, LogLevel::LDEBUG,   __VA_ARGS__) } while (false)
-#define VERBOSE_LOG(t,...) do { GENERIC_LOG(LogType::t, LogLevel::LVERBOSE, __VA_ARGS__) } while (false)
+#define ERROR_LOG(t,...)   do { GENERIC_LOG(t, LogLevel::LERROR,   __VA_ARGS__) } while (false)
+#define WARN_LOG(t,...)    do { GENERIC_LOG(t, LogLevel::LWARNING, __VA_ARGS__) } while (false)
+#define NOTICE_LOG(t,...)  do { GENERIC_LOG(t, LogLevel::LNOTICE,  __VA_ARGS__) } while (false)
+#define INFO_LOG(t,...)    do { GENERIC_LOG(t, LogLevel::LINFO,    __VA_ARGS__) } while (false)
+#define DEBUG_LOG(t,...)   do { GENERIC_LOG(t, LogLevel::LDEBUG,   __VA_ARGS__) } while (false)
+#define VERBOSE_LOG(t,...) do { GENERIC_LOG(t, LogLevel::LVERBOSE, __VA_ARGS__) } while (false)
 
 // Currently only actually shows a dialog box on Windows.
 bool HandleAssert(const char *function, const char *file, int line, const char *expression, const char* format, ...)
@@ -121,6 +123,7 @@ __attribute__((format(printf, 5, 6)))
 bool HitAnyAsserts();
 void ResetHitAnyAsserts();
 void SetExtraAssertInfo(const char *info);
+void SetCleanExitOnAssert();
 
 #if defined(__ANDROID__)
 // Tricky macro to get the basename, that also works if *built* on Win32.

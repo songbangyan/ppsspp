@@ -31,6 +31,9 @@
 #define IS_SIGNED     1 << 1
 #define ROUND_TO_ZERO 1 << 2
 
+// Unclear why we suddenly need this.
+#undef VMIN
+
 namespace ArmGen
 {
 enum ARMReg
@@ -456,7 +459,7 @@ public:
 	void AddNewLit(u32 val);
 	bool TrySetValue_TwoOp(ARMReg reg, u32 val);
 
-	CCFlags GetCC() { return CCFlags(condition >> 28); }
+	CCFlags GetCC() const { return CCFlags(condition >> 28); }
 	void SetCC(CCFlags cond = CC_AL);
 
 	// Special purpose instructions

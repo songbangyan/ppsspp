@@ -24,14 +24,12 @@
 
 #include "Common/Log.h"
 #include "Common/Data/Format/IniFile.h"
-#include "Common/File/FileUtil.h"
 #include "Common/File/DirListing.h"
 #include "Common/File/VFS/VFS.h"
 #include "Common/GPU/OpenGL/GLFeatures.h"
 #include "Common/GPU/thin3d.h"
 #include "Common/StringUtils.h"
 
-#include "Core/Config.h"
 #include "Core/System.h"
 #include "GPU/Common/PostShader.h"
 
@@ -204,7 +202,7 @@ void LoadPostShaderInfo(Draw::DrawContext *draw, const std::vector<Path> &direct
 						appendTextureShader(info);
 					}
 				} else if (!section.name().empty()) {
-					WARN_LOG(G3D, "Unrecognized shader type '%s' or invalid shader in section '%s'", shaderType.c_str(), section.name().c_str());
+					WARN_LOG(Log::G3D, "Unrecognized shader type '%s' or invalid shader in section '%s'", shaderType.c_str(), section.name().c_str());
 				}
 			}
 		}
@@ -257,7 +255,7 @@ void RemoveUnknownPostShaders(std::vector<std::string> *names) {
 	}
 }
 
-const ShaderInfo *GetPostShaderInfo(const std::string &name) {
+const ShaderInfo *GetPostShaderInfo(std::string_view name) {
 	for (size_t i = 0; i < shaderInfo.size(); i++) {
 		if (shaderInfo[i].section == name)
 			return &shaderInfo[i];
@@ -310,7 +308,7 @@ const std::vector<ShaderInfo> &GetAllPostShaderInfo() {
 	return shaderInfo;
 }
 
-const TextureShaderInfo *GetTextureShaderInfo(const std::string &name) {
+const TextureShaderInfo *GetTextureShaderInfo(std::string_view name) {
 	for (auto &info : textureShaderInfo) {
 		if (info.section == name) {
 			return &info;

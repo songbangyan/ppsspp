@@ -50,14 +50,10 @@ void RiscVJitBackend::CompIR_Basic(IRInst inst) {
 
 	case IROp::SetConstF:
 		regs_.Map(inst);
-		if (inst.constant == 0) {
+		if (inst.constant == 0)
 			FCVT(FConv::S, FConv::W, regs_.F(inst.dest), R_ZERO);
-		} else {
-			// TODO: In the future, could use FLI if it's approved.
-			// Also, is FCVT faster?
-			LI(SCRATCH1, (int32_t)inst.constant);
-			FMV(FMv::W, FMv::X, regs_.F(inst.dest), SCRATCH1);
-		}
+		else
+			QuickFLI(32, regs_.F(inst.dest), inst.constant, SCRATCH1);
 		break;
 
 	case IROp::Downcount:
@@ -236,7 +232,7 @@ void RiscVJitBackend::CompIR_System(IRInst inst) {
 		RestoreRoundingMode(true);
 		SaveStaticRegisters();
 		MovFromPC(X10);
-		QuickCallFunction(&Core_Break, SCRATCH2);
+		QuickCallFunction(&Core_BreakException, SCRATCH2);
 		LoadStaticRegisters();
 		ApplyRoundingMode(true);
 		MovFromPC(SCRATCH1);

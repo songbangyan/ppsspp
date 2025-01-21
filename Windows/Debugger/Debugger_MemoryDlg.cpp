@@ -13,7 +13,7 @@
 #include "Debugger_MemoryDlg.h"
 #include "CtrlMemView.h"
 #include "DebuggerShared.h"
-#include "LogManager.h"
+#include "Common/Log.h"
 #include "winnt.h"
 #include <WindowsX.h>
 #include <algorithm>
@@ -54,11 +54,11 @@ LRESULT CALLBACK AddressEditProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
 }
 
 
-CMemoryDlg::CMemoryDlg(HINSTANCE _hInstance, HWND _hParent, DebugInterface *_cpu) : Dialog((LPCSTR)IDD_MEMORY, _hInstance,_hParent)
+CMemoryDlg::CMemoryDlg(HINSTANCE _hInstance, HWND _hParent, MIPSDebugInterface *_cpu) : Dialog((LPCSTR)IDD_MEMORY, _hInstance,_hParent)
 {
 	cpu = _cpu;
 	wchar_t temp[256];
-	wsprintf(temp,L"Memory Viewer - %S",cpu->GetName());
+	wsprintf(temp,L"Memory Viewer - R4");
 	SetWindowText(m_hDlg,temp);
 
 	ShowWindow(m_hDlg,SW_HIDE);
@@ -115,7 +115,7 @@ void CMemoryDlg::Update(void)
 	}	
 }
 
-void CMemoryDlg::searchBoxRedraw(std::vector<u32> results) {
+void CMemoryDlg::searchBoxRedraw(const std::vector<u32> &results) {
 	wchar_t temp[256]{};
 	SendMessage(srcListHdl, WM_SETREDRAW, FALSE, 0);
 	ListBox_ResetContent(srcListHdl);

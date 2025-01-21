@@ -4,7 +4,6 @@
 
 #include "Common/GPU/thin3d.h"
 #include "Common/StringUtils.h"
-#include "Core/System.h"
 #include "Core/Config.h"
 
 #include "GPU/ge_constants.h"
@@ -196,6 +195,7 @@ std::string FragmentShaderDesc(const FShaderID &id) {
 	if (id.Bit(FS_BIT_FLATSHADE)) desc << "Flat ";
 	if (id.Bit(FS_BIT_BGRA_TEXTURE)) desc << "BGRA ";
 	if (id.Bit(FS_BIT_UBERSHADER)) desc << "FragUber ";
+	if (id.Bit(FS_BIT_DEPTH_TEST_NEVER)) desc << "DepthNever ";
 	switch ((ShaderDepalMode)id.Bits(FS_BIT_SHADER_DEPAL_MODE, 2)) {
 	case ShaderDepalMode::OFF: break;
 	case ShaderDepalMode::NORMAL: desc << "Depal ";  break;
@@ -274,6 +274,13 @@ bool FragmentIdNeedsFramebufferRead(const FShaderID &id) {
 	return id.Bit(FS_BIT_COLOR_WRITEMASK) ||
 		id.Bits(FS_BIT_REPLACE_LOGIC_OP, 4) != GE_LOGIC_COPY ||
 		(ReplaceBlendType)id.Bits(FS_BIT_REPLACE_BLEND, 3) == REPLACE_BLEND_READ_FRAMEBUFFER;
+}
+
+inline u32 SanitizeBlendMode(GEBlendMode mode) {
+	if (mode > GE_BLENDMODE_ABSDIFF)
+		return GE_BLENDMODE_MUL_AND_ADD;  // Not sure what the undefined modes are.
+	else
+		return mode;
 }
 
 // Here we must take all the bits of the gstate that determine what the fragment shader will
@@ -370,7 +377,7 @@ void ComputeFragmentShaderID(FShaderID *id_out, const ComputedPipelineState &pip
 			// 3 bits.
 			id.SetBits(FS_BIT_REPLACE_BLEND, 3, replaceBlend);
 			// 11 bits total.
-			id.SetBits(FS_BIT_BLENDEQ, 3, gstate.getBlendEq());
+			id.SetBits(FS_BIT_BLENDEQ, 3, SanitizeBlendMode(gstate.getBlendEq()));
 			id.SetBits(FS_BIT_BLENDFUNC_A, 4, gstate.getBlendFuncA());
 			id.SetBits(FS_BIT_BLENDFUNC_B, 4, gstate.getBlendFuncB());
 		}
@@ -387,11 +394,22 @@ void ComputeFragmentShaderID(FShaderID *id_out, const ComputedPipelineState &pip
 			id.SetBit(FS_BIT_STEREO);
 		}
 
-		if (g_Config.bVendorBugChecksEnabled && bugs.Has(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL)) {
-			bool stencilWithoutDepth = !IsStencilTestOutputDisabled() && (!gstate.isDepthTestEnabled() || !gstate.isDepthWriteEnabled());
-			if (stencilWithoutDepth) {
-				id.SetBit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL, stencilWithoutDepth);
+		if (g_Config.bVendorBugChecksEnabled) {
+			if (bugs.Has(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL_ADRENO) || bugs.Has(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL_MALI)) {
+				// On Adreno, the workaround is safe, so we do simple checks.
+				bool stencilWithoutDepth = (!gstate.isDepthTestEnabled() || !gstate.isDepthWriteEnabled()) && !IsStencilTestOutputDisabled();
+				if (stencilWithoutDepth) {
+					id.SetBit(FS_BIT_NO_DEPTH_CANNOT_DISCARD_STENCIL, stencilWithoutDepth);
+				}
 			}
+		}
+
+		// Forcibly disable NEVER + depth-write on Mali.
+		// TODO: Take this from computed depth test instead of directly from the gstate.
+		// That will take more refactoring though.
+		if (bugs.Has(Draw::Bugs::NO_DEPTH_CANNOT_DISCARD_STENCIL_MALI) &&
+			gstate.getDepthTestFunction() == GE_COMP_NEVER && gstate.isDepthTestEnabled()) {
+			id.SetBit(FS_BIT_DEPTH_TEST_NEVER);
 		}
 
 		// In case the USE flag changes (for example, in multisampling we might disable input attachments),

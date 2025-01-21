@@ -12,6 +12,8 @@
 #include <jni.h>
 #endif
 
+#include <algorithm>
+
 #include "Common/Profiler/Profiler.h"
 #include "Common/System/NativeApp.h"
 #include "Common/System/Request.h"
@@ -30,6 +32,7 @@
 #include "Common/File/FileUtil.h"
 #include "Common/GraphicsContext.h"
 #include "Common/TimeUtil.h"
+#include "Common/StringUtils.h"
 #include "Common/Thread/ThreadManager.h"
 #include "Core/Config.h"
 #include "Core/ConfigValues.h"
@@ -40,8 +43,8 @@
 #include "Core/HLE/sceUtility.h"
 #include "Core/SaveState.h"
 #include "GPU/Common/FramebufferManagerCommon.h"
-#include "Log.h"
-#include "LogManager.h"
+#include "Common/Log.h"
+#include "Common/Log/LogManager.h"
 
 #include "Compare.h"
 #include "HeadlessHost.h"
@@ -66,40 +69,13 @@ bool System_AudioRecordingIsAvailable() { return false; }
 bool System_AudioRecordingState() { return false; }
 #endif
 
-class PrintfLogger : public LogListener {
-public:
-	void Log(const LogMessage &message) override {
-		switch (message.level) {
-		case LogLevel::LVERBOSE:
-			fprintf(stderr, "V %s", message.msg.c_str());
-			break;
-		case LogLevel::LDEBUG:
-			fprintf(stderr, "D %s", message.msg.c_str());
-			break;
-		case LogLevel::LINFO:
-			fprintf(stderr, "I %s", message.msg.c_str());
-			break;
-		case LogLevel::LERROR:
-			fprintf(stderr, "E %s", message.msg.c_str());
-			break;
-		case LogLevel::LWARNING:
-			fprintf(stderr, "W %s", message.msg.c_str());
-			break;
-		case LogLevel::LNOTICE:
-		default:
-			fprintf(stderr, "N %s", message.msg.c_str());
-			break;
-		}
-	}
-};
-
 // Temporary hacks around annoying linking errors.
 void NativeFrame(GraphicsContext *graphicsContext) { }
 void NativeResized() { }
 
 std::string System_GetProperty(SystemProperty prop) { return ""; }
 std::vector<std::string> System_GetPropertyStringVec(SystemProperty prop) { return std::vector<std::string>(); }
-int System_GetPropertyInt(SystemProperty prop) {
+int64_t System_GetPropertyInt(SystemProperty prop) {
 	if (prop == SYSPROP_SYSTEMVERSION)
 		return 31;
 	return -1;
@@ -117,7 +93,7 @@ bool System_GetPropertyBool(SystemProperty prop) {
 }
 void System_Notify(SystemNotification notification) {}
 void System_PostUIMessage(UIMessage message, const std::string &param) {}
-bool System_MakeRequest(SystemRequestType type, int requestId, const std::string &param1, const std::string &param2, int param3) {
+bool System_MakeRequest(SystemRequestType type, int requestId, const std::string &param1, const std::string &param2, int64_t param3, int64_t param4) {
 	switch (type) {
 	case SystemRequestType::SEND_DEBUG_OUTPUT:
 		if (g_headlessHost) {
@@ -135,7 +111,6 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		return false;
 	}
 }
-void System_InputBoxGetString(const std::string &title, const std::string &defaultValue, std::function<void(bool, const std::string &)> cb) { cb(false, ""); }
 void System_AskForPermission(SystemPermission permission) {}
 PermissionStatus System_GetPermissionStatus(SystemPermission permission) { return PERMISSION_STATUS_GRANTED; }
 void System_AudioGetDebugStats(char *buf, size_t bufSize) { if (buf) buf[0] = '\0'; }
@@ -143,8 +118,8 @@ void System_AudioClear() {}
 void System_AudioPushSamples(const s32 *audio, int numSamples) {}
 
 // TODO: To avoid having to define these here, these should probably be turned into system "requests".
-bool NativeSaveSecret(const char *nameOfSecret, const std::string &data) { return false; }
-std::string NativeLoadSecret(const char *nameOfSecret) {
+bool NativeSaveSecret(std::string_view nameOfSecret, std::string_view data) { return false; }
+std::string NativeLoadSecret(std::string_view nameOfSecret) {
 	return "";
 }
 
@@ -223,7 +198,7 @@ bool RunAutoTest(HeadlessHost *headlessHost, CoreParameter &coreParameter, const
 		headlessHost->SetComparisonScreenshot(ExpectedScreenshotFromFilename(coreParameter.fileToStart), opt.maxScreenshotError);
 
 	while (!PSP_InitUpdate(&error_string))
-		sleep_ms(1);
+		sleep_ms(1, "auto-test");
 	if (!PSP_IsInited()) {
 		TeamCityPrint("testFailed name='%s' message='Startup failed'", currentTestName.c_str());
 		TeamCityPrint("testFinished name='%s'", currentTestName.c_str());
@@ -233,7 +208,7 @@ bool RunAutoTest(HeadlessHost *headlessHost, CoreParameter &coreParameter, const
 
 	System_Notify(SystemNotification::BOOT_DONE);
 
-	Core_UpdateDebugStats((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS || g_Config.bLogFrameDrops);
+	PSP_UpdateDebugStats((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::DEBUG_STATS || g_Config.bLogFrameDrops);
 
 	PSP_BeginHostFrame();
 	Draw::DrawContext *draw = coreParameter.graphicsContext ? coreParameter.graphicsContext->GetDrawContext() : nullptr;
@@ -242,21 +217,26 @@ bool RunAutoTest(HeadlessHost *headlessHost, CoreParameter &coreParameter, const
 
 	bool passed = true;
 	double deadline = time_now_d() + opt.timeout;
-	coreState = coreParameter.startBreak ? CORE_STEPPING : CORE_RUNNING;
-	while (coreState == CORE_RUNNING || coreState == CORE_STEPPING)
+	coreState = coreParameter.startBreak ? CORE_STEPPING_CPU : CORE_RUNNING_CPU;
+	while (coreState == CORE_RUNNING_CPU || coreState == CORE_STEPPING_CPU)
 	{
 		int blockTicks = (int)usToCycles(1000000 / 10);
 		PSP_RunLoopFor(blockTicks);
 
 		// If we were rendering, this might be a nice time to do something about it.
 		if (coreState == CORE_NEXTFRAME) {
-			coreState = CORE_RUNNING;
+			coreState = CORE_RUNNING_CPU;
 			headlessHost->SwapBuffers();
 		}
-		if (coreState == CORE_STEPPING && !coreParameter.startBreak) {
+		if (coreState == CORE_STEPPING_CPU && !coreParameter.startBreak) {
 			break;
 		}
-		if (time_now_d() > deadline) {
+		bool debugger = false;
+#ifdef _WIN32
+		if (IsDebuggerPresent())
+			debugger = true;
+#endif
+		if (time_now_d() > deadline && !debugger) {
 			// Don't compare, print the output at least up to this point, and bail.
 			if (!opt.bench) {
 				printf("%s", output.c_str());
@@ -316,11 +296,40 @@ std::vector<std::string> ReadFromListFile(const std::string &listFilename) {
 	return testFilenames;
 }
 
+static void AddRecursively(std::vector<std::string> *tests, Path actualPath) {
+	// TODO: Some file systems can optimize this.
+	std::vector<File::FileInfo> fileInfo;
+	if (!File::GetFilesInDir(actualPath, &fileInfo, "prx")) {
+		return;
+	}
+	for (const auto &file : fileInfo) {
+		if (file.isDirectory) {
+			AddRecursively(tests, actualPath / file.name);
+		} else if (file.name != "Makefile") {  // hack around filter problem
+			tests->push_back((actualPath / file.name).ToString());
+		}
+	}
+}
+
+static void AddTestsByPath(std::vector<std::string> *tests, std::string_view path) {
+	if (endsWith(path, "/...")) {
+		path = path.substr(0, path.size() - 4);
+		// Recurse for tests
+		AddRecursively(tests, Path(path));
+	} /* else if (File::IsDirectory(Path(path))) {
+		// Alternate syntax - just specify the path.
+		AddRecursively(tests, Path(path));
+	} */ else {
+		tests->push_back(std::string(path));
+	}
+}
+
 int main(int argc, const char* argv[])
 {
 	PROFILE_INIT();
+	TimeInit();
 #if PPSSPP_PLATFORM(WINDOWS)
-	timeBeginPeriod(1);
+	SetCleanExitOnAssert();
 #else
 	// Ignore sigpipe.
 	if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
@@ -339,8 +348,11 @@ int main(int argc, const char* argv[])
 	GPUCore gpuCore = GPUCORE_SOFTWARE;
 	CPUCore cpuCore = CPUCore::JIT;
 	int debuggerPort = -1;
+	bool newAtrac = false;
+	bool outputDebugStringLog = false;
 
 	std::vector<std::string> testFilenames;
+	std::vector<std::string> ignoredTests;
 	const char *mountIso = nullptr;
 	const char *mountRoot = nullptr;
 	const char *screenshotFilename = nullptr;
@@ -361,6 +373,8 @@ int main(int argc, const char* argv[])
 		}
 		else if (!strcmp(argv[i], "-l") || !strcmp(argv[i], "--log"))
 			fullLog = true;
+		else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--odslog"))
+			outputDebugStringLog = true;
 		else if (!strcmp(argv[i], "-i"))
 			cpuCore = CPUCore::INTERPRETER;
 		else if (!strcmp(argv[i], "-j"))
@@ -375,6 +389,8 @@ int main(int argc, const char* argv[])
 			testOptions.bench = true;
 		else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose"))
 			testOptions.verbose = true;
+		else if (!strcmp(argv[i], "--new-atrac"))
+			newAtrac = true;
 		else if (!strncmp(argv[i], "--graphics=", strlen("--graphics=")) && strlen(argv[i]) > strlen("--graphics="))
 		{
 			const char *gpuName = argv[i] + strlen("--graphics=");
@@ -413,27 +429,43 @@ int main(int argc, const char* argv[])
 			stateToLoad = argv[i] + strlen("--state=");
 		else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
 			return printUsage(argv[0], NULL);
-		else
-			testFilenames.push_back(argv[i]);
+		else if (!strcmp(argv[i], "--ignore")) {
+			if (++i >= argc)
+				return printUsage(argv[0], "Missing argument after --ignore");
+			ignoredTests.push_back(argv[i]);
+		} else {
+			AddTestsByPath(&testFilenames, argv[i]);
+		}
 	}
 
 	if (testFilenames.size() == 1 && testFilenames[0][0] == '@')
 		testFilenames = ReadFromListFile(testFilenames[0].substr(1));
 
+	// Remove any ignored tests.
+	testFilenames.erase(
+		std::remove_if(
+			testFilenames.begin(),
+			testFilenames.end(),
+			[&ignoredTests](const std::string& item) { return std::find(ignoredTests.begin(), ignoredTests.end(), item) != ignoredTests.end(); }
+		),
+		testFilenames.end()
+	);
+
 	if (testFilenames.empty())
 		return printUsage(argv[0], argc <= 1 ? NULL : "No executables specified");
 
-	LogManager::Init(&g_Config.bEnableLogging);
-	LogManager *logman = LogManager::GetInstance();
+	g_Config.bEnableLogging = (fullLog || outputDebugStringLog);
+	g_logManager.Init(&g_Config.bEnableLogging, outputDebugStringLog);
 
-	PrintfLogger *printfLogger = new PrintfLogger();
-
-	for (int i = 0; i < (int)LogType::NUMBER_OF_LOGS; i++) {
-		LogType type = (LogType)i;
-		logman->SetEnabled(type, fullLog);
-		logman->SetLogLevel(type, LogLevel::LDEBUG);
+	for (int i = 0; i < (int)Log::NUMBER_OF_LOGS; i++) {
+		Log type = (Log)i;
+		g_logManager.SetEnabled(type, (fullLog || outputDebugStringLog));
+		g_logManager.SetLogLevel(type, LogLevel::LDEBUG);
 	}
-	logman->AddListener(printfLogger);
+	if (fullLog) {
+		// Only with --log, add the printfLogger.
+		g_logManager.EnableOutput(LogOutput::Printf);
+	}
 
 	// Needs to be after log so we don't interfere with test output.
 	g_threadManager.Init(cpu_info.num_cores, cpu_info.logical_cpu_count);
@@ -482,7 +514,7 @@ int main(int argc, const char* argv[])
 	g_Config.iLockParentalLevel = 9;
 	g_Config.iInternalResolution = 1;
 	g_Config.iFastForwardMode = (int)FastForwardMode::CONTINUOUS;
-	g_Config.bEnableLogging = fullLog;
+	g_Config.bEnableLogging = (fullLog || outputDebugStringLog);
 	g_Config.bSoftwareSkinning = true;
 	g_Config.bVertexDecoderJit = true;
 	g_Config.bSoftwareRendering = coreParameter.gpuCore == GPUCORE_SOFTWARE;
@@ -498,6 +530,7 @@ int main(int argc, const char* argv[])
 	g_Config.iGlobalVolume = VOLUME_FULL;
 	g_Config.iReverbVolume = VOLUME_FULL;
 	g_Config.internalDataDirectory.clear();
+	g_Config.bUseExperimentalAtrac = newAtrac;
 
 	Path exePath = File::GetExeDirectory();
 	g_Config.flash0Directory = exePath / "assets/flash0";
@@ -614,8 +647,7 @@ int main(int argc, const char* argv[])
 	g_headlessHost = nullptr;
 
 	g_VFS.Clear();
-	LogManager::Shutdown();
-	delete printfLogger;
+	g_logManager.Shutdown();
 
 #if PPSSPP_PLATFORM(WINDOWS)
 	timeEndPeriod(1);

@@ -117,7 +117,7 @@ void Arm64JitBackend::CompIR_Breakpoint(IRInst inst) {
 			bool isWrite = MIPSAnalyst::IsOpMemoryWrite(checkedPC);
 
 			MemCheck check;
-			if (CBreakPoints::GetMemCheckInRange(iaddr, size, &check)) {
+			if (g_breakpoints.GetMemCheckInRange(iaddr, size, &check)) {
 				if (!(check.cond & MEMCHECK_READ) && !isWrite)
 					break;
 				if (!(check.cond & (MEMCHECK_WRITE | MEMCHECK_WRITE_ONCHANGE)) && isWrite)
@@ -148,7 +148,7 @@ void Arm64JitBackend::CompIR_Breakpoint(IRInst inst) {
 			}
 			bool isWrite = MIPSAnalyst::IsOpMemoryWrite(checkedPC);
 
-			const auto memchecks = CBreakPoints::GetMemCheckRanges(isWrite);
+			const auto memchecks = g_breakpoints.GetMemCheckRanges(isWrite);
 			// We can trivially skip if there are no checks for this type (i.e. read vs write.)
 			if (memchecks.empty())
 				break;
@@ -260,7 +260,7 @@ void Arm64JitBackend::CompIR_System(IRInst inst) {
 		RestoreRoundingMode(true);
 		SaveStaticRegisters();
 		MovFromPC(W0);
-		QuickCallFunction(SCRATCH2_64, &Core_Break);
+		QuickCallFunction(SCRATCH2_64, &Core_BreakException);
 		LoadStaticRegisters();
 		ApplyRoundingMode(true);
 		MovFromPC(SCRATCH1);
@@ -386,7 +386,6 @@ void Arm64JitBackend::CompIR_ValidateAddress(IRInst inst) {
 	ANDI2R(SCRATCH1, SCRATCH1, 0x3FFFFFFF, SCRATCH2);
 
 	std::vector<FixupBranch> validJumps;
-	validJumps.reserve(3);
 
 	FixupBranch unaligned;
 	if (alignment == 2) {

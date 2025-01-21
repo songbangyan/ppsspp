@@ -15,11 +15,10 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <cstdint>
-#include <algorithm>
-
 #include "Common/GPU/thin3d.h"
 
 #include "Common/System/Display.h"
@@ -84,14 +83,6 @@ void CalculateDisplayOutputRect(FRect *rc, float origW, float origH, const FRect
 	float scale = g_Config.fDisplayScale;
 	float aspectRatioAdjust = g_Config.fDisplayAspectRatio;
 
-	// Ye olde 1080p hack, new version: If everything is setup to exactly cover the screen (defaults), and the screen display aspect ratio is 16:9,
-	// stretch the PSP's aspect ratio veeery slightly to fill it completely.
-	if (scale == 1.0f && offsetX == 0.5f && offsetY == 0.5f && aspectRatioAdjust == 1.0f && !g_Config.bDisplayIntegerScale) {
-		if (fabsf(frame.w / frame.h - 16.0f / 9.0f) < 0.0001f) {
-			aspectRatioAdjust = (frame.w / frame.h) / (480.0f / 272.0f);
-		}
-	}
-
 	float origRatio = !rotated ? origW / origH : origH / origW;
 	float frameRatio = frame.w / frame.h;
 
@@ -99,7 +90,7 @@ void CalculateDisplayOutputRect(FRect *rc, float origW, float origH, const FRect
 		// Automatically set aspect ratio to match the display, IF the rotation matches the output display ratio! Otherwise, just
 		// sets standard aspect ratio because actually stretching will just look silly.
 		bool globalRotated = g_display.rotation == DisplayRotation::ROTATE_90 || g_display.rotation == DisplayRotation::ROTATE_270;
-		if (rotated == g_display.dp_yres > g_display.dp_xres) {
+		if (rotated == (g_display.dp_yres > g_display.dp_xres)) {
 			origRatio = frameRatio;
 		} else {
 			origRatio *= aspectRatioAdjust;
@@ -119,6 +110,15 @@ void CalculateDisplayOutputRect(FRect *rc, float origW, float origH, const FRect
 		// Image is taller than frame. Center horizontally.
 		outW = scaledHeight * origRatio;
 		outH = scaledHeight;
+	}
+
+	// Ye olde 1080p hack: If everything is setup to exactly cover the screen (defaults), and the screen display aspect ratio is 16:9,
+	// cut off one line from the top and bottom.
+	if (scale == 1.0f && aspectRatioAdjust == 1.0f && offsetX == 0.5f && offsetY == 0.5f && !g_Config.bDisplayIntegerScale && g_Config.bDisplayCropTo16x9) {
+		if (fabsf(frame.w / frame.h - 16.0f / 9.0f) < 0.0001f) {
+			outW *= 272.0f / 270.0f;
+			outH *= 272.0f / 270.0f;
+		}
 	}
 
 	if (g_Config.bDisplayIntegerScale) {
@@ -256,7 +256,7 @@ bool PresentationCommon::UpdatePostShader() {
 				stereoShaderInfo_ = new ShaderInfo(*stereoShaderInfo);
 			}
 		} else {
-			WARN_LOG(G3D, "Failed to get info about stereo shader '%s'", g_Config.sStereoToMonoShader.c_str());
+			WARN_LOG(Log::G3D, "Failed to get info about stereo shader '%s'", g_Config.sStereoToMonoShader.c_str());
 		}
 	}
 
@@ -334,7 +334,7 @@ bool PresentationCommon::CompilePostShader(const ShaderInfo *shaderInfo, Draw::P
 		std::string errorString = vsError + "\n" + fsError;
 		// DO NOT turn this into an ERROR_LOG_REPORT, as it will pollute our logs with all kinds of
 		// user shader experiments.
-		ERROR_LOG(FRAMEBUF, "Failed to build post-processing program from %s and %s!\n%s", shaderInfo->vertexShaderFile.c_str(), shaderInfo->fragmentShaderFile.c_str(), errorString.c_str());
+		ERROR_LOG(Log::FrameBuf, "Failed to build post-processing program from %s and %s!\n%s", shaderInfo->vertexShaderFile.c_str(), shaderInfo->fragmentShaderFile.c_str(), errorString.c_str());
 		ShowPostShaderError(errorString);
 		return false;
 	}
@@ -571,7 +571,7 @@ Draw::ShaderModule *PresentationCommon::CompileShaderModule(ShaderStage stage, S
 	if (lang != lang_) {
 		// Gonna have to upconvert the shader.
 		if (!TranslateShader(&translated, lang_, draw_->GetShaderLanguageDesc(), nullptr, src, lang, stage, errorString)) {
-			ERROR_LOG(FRAMEBUF, "Failed to translate post-shader. Error string: '%s'\nSource code:\n%s\n", errorString->c_str(), src.c_str());
+			ERROR_LOG(Log::FrameBuf, "Failed to translate post-shader. Error string: '%s'\nSource code:\n%s\n", errorString->c_str(), src.c_str());
 			return nullptr;
 		}
 	}
@@ -610,15 +610,15 @@ bool PresentationCommon::BindSource(int binding, bool bindStereo) {
 	} else if (srcFramebuffer_) {
 		if (bindStereo) {
 			if (srcFramebuffer_->Layers() > 1) {
-				draw_->BindFramebufferAsTexture(srcFramebuffer_, binding, Draw::FB_COLOR_BIT, Draw::ALL_LAYERS);
+				draw_->BindFramebufferAsTexture(srcFramebuffer_, binding, Draw::Aspect::COLOR_BIT, Draw::ALL_LAYERS);
 				return true;
 			} else {
 				// Single layer. This might be from a post shader and those don't yet support stereo.
-				draw_->BindFramebufferAsTexture(srcFramebuffer_, binding, Draw::FB_COLOR_BIT, 0);
+				draw_->BindFramebufferAsTexture(srcFramebuffer_, binding, Draw::Aspect::COLOR_BIT, 0);
 				return false;
 			}
 		} else {
-			draw_->BindFramebufferAsTexture(srcFramebuffer_, binding, Draw::FB_COLOR_BIT, 0);
+			draw_->BindFramebufferAsTexture(srcFramebuffer_, binding, Draw::Aspect::COLOR_BIT, 0);
 			return false;
 		}
 	} else {
@@ -764,13 +764,13 @@ void PresentationCommon::CopyToOutput(OutputFlags flags, int uvRotation, float u
 	PostShaderUniforms uniforms;
 	const auto performShaderPass = [&](const ShaderInfo *shaderInfo, Draw::Framebuffer *postShaderFramebuffer, Draw::Pipeline *postShaderPipeline, int vertsOffset) {
 		if (postShaderOutput) {
-			draw_->BindFramebufferAsTexture(postShaderOutput, 0, Draw::FB_COLOR_BIT, 0);
+			draw_->BindFramebufferAsTexture(postShaderOutput, 0, Draw::Aspect::COLOR_BIT, 0);
 		} else {
 			BindSource(0, false);
 		}
 		BindSource(1, false);
 		if (shaderInfo->usePreviousFrame)
-			draw_->BindFramebufferAsTexture(previousFramebuffer, 2, Draw::FB_COLOR_BIT, 0);
+			draw_->BindFramebufferAsTexture(previousFramebuffer, 2, Draw::Aspect::COLOR_BIT, 0);
 
 		int nextWidth, nextHeight;
 		draw_->GetFramebufferDimensions(postShaderFramebuffer, &nextWidth, &nextHeight);
@@ -799,6 +799,7 @@ void PresentationCommon::CopyToOutput(OutputFlags flags, int uvRotation, float u
 
 	if (usePostShader) {
 		// When we render to temp framebuffers during post, we switch position, not UV.
+		// The flipping here is only because D3D has a clip coordinate system that doesn't match their screen coordinate system.
 		// The flipping here is only because D3D has a clip coordinate system that doesn't match their screen coordinate system.
 		bool flipped = flags & OutputFlags::POSITION_FLIPPED;
 		float y0 = flipped ? 1.0f : -1.0f;
@@ -877,7 +878,7 @@ void PresentationCommon::CopyToOutput(OutputFlags flags, int uvRotation, float u
 
 		draw_->BindPipeline(pipeline);
 		if (postShaderOutput) {
-			draw_->BindFramebufferAsTexture(postShaderOutput, 0, Draw::FB_COLOR_BIT, 0);
+			draw_->BindFramebufferAsTexture(postShaderOutput, 0, Draw::Aspect::COLOR_BIT, 0);
 		} else {
 			BindSource(0, false);
 		}

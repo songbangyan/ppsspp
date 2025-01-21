@@ -18,7 +18,7 @@
 #include "Core/HLE/sceUmd.h"
 #include "Core/SaveState.h"
 #include "Core/System.h"
-#include "GPU/GPUInterface.h"
+#include "GPU/GPUCommon.h"
 #include "UI/GamepadEmu.h"
 
 MainWindow::MainWindow(QWidget *parent, bool fullscreen) :
@@ -117,7 +117,7 @@ void MainWindow::updateMenus()
 
 void MainWindow::bootDone()
 {
-	if (nextState == CORE_RUNNING)
+	if (nextState == CORE_RUNNING_CPU)
 		runAct();
 	updateMenus();
 }
@@ -149,7 +149,7 @@ void MainWindow::openmsAct()
 	QDesktopServices::openUrl(QUrl(memorystick));
 }
 
-void SaveStateActionFinished(SaveState::Status status, const std::string &message, void *userdata)
+static void SaveStateActionFinished(SaveState::Status status, std::string_view message, void *userdata)
 {
 	// TODO: Improve messaging?
 	if (status == SaveState::Status::FAILURE)
@@ -350,7 +350,9 @@ void MainWindow::dumpNextAct()
 
 void MainWindow::consoleAct()
 {
+#if PPSSPP_PLATFORM(WINDOWS)
 	LogManager::GetInstance()->GetConsoleListener()->Show(LogManager::GetInstance()->GetConsoleListener()->Hidden());
+#endif
 }
 
 void MainWindow::raiseTopMost()

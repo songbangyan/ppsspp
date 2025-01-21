@@ -25,15 +25,11 @@ TextDrawerAndroid::TextDrawerAndroid(Draw::DrawContext *draw) : TextDrawer(draw)
 		method_measureText = env->GetStaticMethodID(cls_textRenderer, "measureText", "(Ljava/lang/String;D)I");
 		method_renderText = env->GetStaticMethodID(cls_textRenderer, "renderText", "(Ljava/lang/String;D)[I");
 	} else {
-		ERROR_LOG(G3D, "Failed to find class: '%s'", textRendererClassName);
+		ERROR_LOG(Log::G3D, "Failed to find class: '%s'", textRendererClassName);
 	}
 	dpiScale_ = CalculateDPIScale();
 
-	// Pick between the two supported formats, of which at least one is supported on each platform. Prefer R8 (but only if swizzle is supported)
-	use4444Format_ = (draw->GetDataFormatSupport(Draw::DataFormat::R4G4B4A4_UNORM_PACK16) & Draw::FMT_TEXTURE) != 0;
-	if ((draw->GetDataFormatSupport(Draw::DataFormat::R8_UNORM) & Draw::FMT_TEXTURE) != 0 && draw->GetDeviceCaps().textureSwizzleSupported)
-		use4444Format_ = false;
-	INFO_LOG(G3D, "Initializing TextDrawerAndroid with DPI scale %f, use4444=%d", dpiScale_, (int)use4444Format_);
+	INFO_LOG(Log::G3D, "Initializing TextDrawerAndroid with DPI scale %f", dpiScale_);
 }
 
 TextDrawerAndroid::~TextDrawerAndroid() {
@@ -41,6 +37,7 @@ TextDrawerAndroid::~TextDrawerAndroid() {
 	// At worst we leak one ref...
 	// env_->DeleteGlobalRef(cls_textRenderer);
 	ClearCache();
+	fontMap_.clear();  // size is precomputed using dpiScale_.
 }
 
 bool TextDrawerAndroid::IsReady() const {
@@ -61,8 +58,8 @@ uint32_t TextDrawerAndroid::SetFont(const char *fontName, int size, int flags) {
 	}
 
 	// Just chose a factor that looks good, don't know what unit size is in anyway.
-	AndroidFontEntry entry;
-	entry.size = (float)(size * 1.4f) / dpiScale_;
+	AndroidFontEntry entry{};
+	entry.size = ((float)size * 1.4f) / dpiScale_;
 	fontMap_[fontHash] = entry;
 	fontHash_ = fontHash;
 	return fontHash;
@@ -74,117 +71,52 @@ void TextDrawerAndroid::SetFont(uint32_t fontHandle) {
 	if (iter != fontMap_.end()) {
 		fontHash_ = fontHandle;
 	} else {
-		ERROR_LOG(G3D, "Invalid font handle %08x", fontHandle);
+		ERROR_LOG(Log::G3D, "Invalid font handle %08x", fontHandle);
 	}
 }
 
-std::string TextDrawerAndroid::NormalizeString(std::string str) {
-	return ReplaceAll(str, "&&", "&");
-}
-
-void TextDrawerAndroid::MeasureString(const char *str, size_t len, float *w, float *h) {
-	if (!str) {
-		*w = 0.0;
-		*h = 0.0;
-		return;
-	}
-
-	CacheKey key{ std::string(str, len), fontHash_ };
-	TextMeasureEntry *entry;
-	auto iter = sizeCache_.find(key);
-	if (iter != sizeCache_.end()) {
-		entry = iter->second.get();
-	} else {
-		float scaledSize = 14;
-		auto iter = fontMap_.find(fontHash_);
-		if (iter != fontMap_.end()) {
-			scaledSize = iter->second.size;
-		} else {
-			ERROR_LOG(G3D, "Missing font");
-		}
-		std::string text(NormalizeString(std::string(str, len)));
-		auto env = getEnv();
-		jstring jstr = env->NewStringUTF(text.c_str());
-		uint32_t size = env->CallStaticIntMethod(cls_textRenderer, method_measureText, jstr, scaledSize);
-		env->DeleteLocalRef(jstr);
-
-		entry = new TextMeasureEntry();
-		entry->width = (size >> 16);
-		entry->height = (size & 0xFFFF);
-		sizeCache_[key] = std::unique_ptr<TextMeasureEntry>(entry);
-	}
-	entry->lastUsedFrame = frameCount_;
-	*w = entry->width * fontScaleX_ * dpiScale_;
-	*h = entry->height * fontScaleY_ * dpiScale_;
-}
-
-void TextDrawerAndroid::MeasureStringRect(const char *str, size_t len, const Bounds &bounds, float *w, float *h, int align) {
-	double scaledSize = 14;
+void TextDrawerAndroid::MeasureStringInternal(std::string_view str, float *w, float *h) {
+	float scaledSize = 14;
 	auto iter = fontMap_.find(fontHash_);
 	if (iter != fontMap_.end()) {
 		scaledSize = iter->second.size;
 	} else {
-		ERROR_LOG(G3D, "Missing font");
+		ERROR_LOG(Log::G3D, "Missing font");
 	}
-
-	std::string toMeasure = std::string(str, len);
-	int wrap = align & (FLAG_WRAP_TEXT | FLAG_ELLIPSIZE_TEXT);
-	if (wrap) {
-		bool rotated = (align & (ROTATE_90DEG_LEFT | ROTATE_90DEG_RIGHT)) != 0;
-		WrapString(toMeasure, toMeasure.c_str(), rotated ? bounds.h : bounds.w, wrap);
-	}
+	std::string text;
+	ConvertUTF8ToJavaModifiedUTF8(&text, str);
 
 	auto env = getEnv();
-	std::vector<std::string> lines;
-	SplitString(toMeasure, '\n', lines);
-	int total_w = 0;
-	int total_h = 0;
-	for (size_t i = 0; i < lines.size(); i++) {
-		CacheKey key{ lines[i], fontHash_ };
+	jstring jstr = env->NewStringUTF(text.c_str());
+	uint32_t size = env->CallStaticIntMethod(cls_textRenderer, method_measureText, jstr, scaledSize);
+	env->DeleteLocalRef(jstr);
 
-		TextMeasureEntry *entry;
-		auto iter = sizeCache_.find(key);
-		if (iter != sizeCache_.end()) {
-			entry = iter->second.get();
-		} else {
-			std::string text(NormalizeString(lines[i]));
-			jstring jstr = env->NewStringUTF(text.c_str());
-			uint32_t size = env->CallStaticIntMethod(cls_textRenderer, method_measureText, jstr, scaledSize);
-			env->DeleteLocalRef(jstr);
-			int sizecx = size >> 16;
-			int sizecy = size & 0xFFFF;
-			entry = new TextMeasureEntry();
-			entry->width = sizecx;
-			entry->height = sizecy;
-			sizeCache_[key] = std::unique_ptr<TextMeasureEntry>(entry);
-		}
-		entry->lastUsedFrame = frameCount_;
+	*w = (float)(size >> 16);
+	*h = (float)(size & 0xFFFF);
 
-		if (total_w < entry->width) {
-			total_w = entry->width;
-		}
-		total_h += entry->height;
-	}
-	*w = total_w * fontScaleX_ * dpiScale_;
-	*h = total_h * fontScaleY_ * dpiScale_;
+	// WARN_LOG(Log::G3D, "Measure Modified: '%.*s' size: %fx%f", (int)text.length(), text.data(), *w, *h);
 }
 
-void TextDrawerAndroid::DrawStringBitmap(std::vector<uint8_t> &bitmapData, TextStringEntry &entry, Draw::DataFormat texFormat, const char *str, int align) {
-	if (!strlen(str)) {
+bool TextDrawerAndroid::DrawStringBitmap(std::vector<uint8_t> &bitmapData, TextStringEntry &entry, Draw::DataFormat texFormat, std::string_view str, int align, bool fullColor) {
+	if (str.empty()) {
 		bitmapData.clear();
-		return;
+		return false;
 	}
 
-	double size = 0.0;
+	float size = 0.0f;
 	auto iter = fontMap_.find(fontHash_);
 	if (iter != fontMap_.end()) {
 		size = iter->second.size;
 	} else {
-		ERROR_LOG(G3D, "Missing font");
+		ERROR_LOG(Log::G3D, "Missing font");
 	}
 
 	auto env = getEnv();
-	jstring jstr = env->NewStringUTF(str);
+
+	std::string text;
+	ConvertUTF8ToJavaModifiedUTF8(&text, str);
+	jstring jstr = env->NewStringUTF(text.c_str());
+
 	uint32_t textSize = env->CallStaticIntMethod(cls_textRenderer, method_measureText, jstr, size);
 	int imageWidth = (short)(textSize >> 16);
 	int imageHeight = (short)(textSize & 0xFFFF);
@@ -192,6 +124,7 @@ void TextDrawerAndroid::DrawStringBitmap(std::vector<uint8_t> &bitmapData, TextS
 		imageWidth = 1;
 	if (imageHeight <= 0)
 		imageHeight = 1;
+	// WARN_LOG(Log::G3D, "Text: '%.*s' (%02x)", (int)str.length(), str.data(), str[0]);
 
 	jintArray imageData = (jintArray)env->CallStaticObjectMethod(cls_textRenderer, method_renderText, jstr, size);
 	env->DeleteLocalRef(jstr);
@@ -237,109 +170,13 @@ void TextDrawerAndroid::DrawStringBitmap(std::vector<uint8_t> &bitmapData, TextS
 	} else {
 		_assert_msg_(false, "Bad TextDrawer format");
 	}
-	env->ReleaseIntArrayElements(imageData, jimage, 0);
+	env->ReleaseIntArrayElements(imageData, jimage, JNI_ABORT);
 	env->DeleteLocalRef(imageData);
+	return true;
 }
 
-void TextDrawerAndroid::DrawString(DrawBuffer &target, const char *str, float x, float y, uint32_t color, int align) {
-	using namespace Draw;
-	if (!str)
-		return;
-
-	std::string text(NormalizeString(std::string(str)));
-	if (text.empty())
-		return;
-
-	CacheKey key{ std::string(str), fontHash_ };
-	target.Flush(true);
-
-	TextStringEntry *entry;
-
-	auto iter = cache_.find(key);
-	if (iter != cache_.end()) {
-		entry = iter->second.get();
-		entry->lastUsedFrame = frameCount_;
-	} else {
-		DataFormat texFormat = use4444Format_ ? Draw::DataFormat::R4G4B4A4_UNORM_PACK16 : Draw::DataFormat::R8_UNORM;
-		bool emoji = AnyEmojiInString(text.c_str(), text.size());
-		if (emoji) {
-			texFormat = Draw::DataFormat::R8G8B8A8_UNORM;
-		}
-
-		entry = new TextStringEntry();
-
-		TextureDesc desc{};
-		std::vector<uint8_t> bitmapData;
-		DrawStringBitmap(bitmapData, *entry, texFormat, text.c_str(), align);
-		desc.initData.push_back(&bitmapData[0]);
-
-		desc.type = TextureType::LINEAR2D;
-		desc.format = texFormat;
-		desc.width = entry->bmWidth;
-		desc.height = entry->bmHeight;
-		desc.depth = 1;
-		desc.mipLevels = 1;
-		desc.generateMips = false;
-		desc.swizzle = texFormat == Draw::DataFormat::R8_UNORM ? Draw::TextureSwizzle::R8_AS_ALPHA : Draw::TextureSwizzle::DEFAULT,
-		desc.tag = "TextDrawer";
-		entry->texture = draw_->CreateTexture(desc);
-		cache_[key] = std::unique_ptr<TextStringEntry>(entry);
-	}
-
-	if (entry->texture) {
-		draw_->BindTexture(0, entry->texture);
-	}
-
-	float w = entry->bmWidth * fontScaleX_ * dpiScale_;
-	float h = entry->bmHeight * fontScaleY_ * dpiScale_;
-	DrawBuffer::DoAlign(align, &x, &y, &w, &h);
-	if (entry->texture) {
-		target.DrawTexRect(x, y, x + w, y + h, 0.0f, 0.0f, 1.0f, 1.0f, color);
-		target.Flush(true);
-	}
-}
-
-void TextDrawerAndroid::ClearCache() {
-	for (auto &iter : cache_) {
-		if (iter.second->texture)
-			iter.second->texture->Release();
-	}
-	cache_.clear();
-	sizeCache_.clear();
-}
-
-void TextDrawerAndroid::OncePerFrame() {
-	frameCount_++;
-	// If DPI changed (small-mode, future proper monitor DPI support), drop everything.
-	float newDpiScale = CalculateDPIScale();
-	if (newDpiScale != dpiScale_) {
-		// TODO: Don't bother if it's a no-op (cache already empty)
-		INFO_LOG(G3D, "DPI Scale changed (%f to %f) - wiping font cache (%d items, %d fonts)", dpiScale_, newDpiScale, (int)cache_.size(), (int)fontMap_.size());
-		dpiScale_ = newDpiScale;
-		ClearCache();
-		fontMap_.clear();  // size is precomputed using dpiScale_.
-	}
-
-	// Drop old strings. Use a prime number to reduce clashing with other rhythms
-	if (frameCount_ % 23 == 0) {
-		for (auto iter = cache_.begin(); iter != cache_.end();) {
-			if (frameCount_ - iter->second->lastUsedFrame > 100) {
-				if (iter->second->texture)
-					iter->second->texture->Release();
-				cache_.erase(iter++);
-			} else {
-				iter++;
-			}
-		}
-
-		for (auto iter = sizeCache_.begin(); iter != sizeCache_.end(); ) {
-			if (frameCount_ - iter->second->lastUsedFrame > 100) {
-				sizeCache_.erase(iter++);
-			} else {
-				iter++;
-			}
-		}
-	}
+void TextDrawerAndroid::ClearFonts() {
+	fontMap_.clear();  // size is precomputed using dpiScale_.
 }
 
 #endif

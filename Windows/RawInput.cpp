@@ -147,7 +147,6 @@ namespace WindowsRawInput {
 		{ VK_RIGHT, NKCODE_DPAD_RIGHT },
 		{ VK_CAPITAL, NKCODE_CAPS_LOCK },
 		{ VK_CLEAR, NKCODE_CLEAR },
-		{ VK_SNAPSHOT, NKCODE_SYSRQ },
 		{ VK_SCROLL, NKCODE_SCROLL_LOCK },
 		{ VK_OEM_1, NKCODE_SEMICOLON },
 		{ VK_OEM_2, NKCODE_SLASH },
@@ -156,10 +155,11 @@ namespace WindowsRawInput {
 		{ VK_OEM_5, NKCODE_BACKSLASH },
 		{ VK_OEM_6, NKCODE_RIGHT_BRACKET },
 		{ VK_OEM_7, NKCODE_APOSTROPHE },
+		{ VK_OEM_8, NKCODE_GRAVE }, // Key left of 1 (above Q) on a lot of layouts.
 		{ VK_RETURN, NKCODE_ENTER },
 		{ VK_APPS, NKCODE_MENU }, // Context menu key, let's call this "menu".
 		{ VK_PAUSE, NKCODE_BREAK },
-		{ VK_F1, NKCODE_F1 },
+		{ VK_F1, NKCODE_F1 },	
 		{ VK_F2, NKCODE_F2 },
 		{ VK_F3, NKCODE_F3 },
 		{ VK_F4, NKCODE_F4 },
@@ -177,11 +177,11 @@ namespace WindowsRawInput {
 		{ VK_MBUTTON, NKCODE_EXT_MOUSEBUTTON_3 },
 		{ VK_XBUTTON1, NKCODE_EXT_MOUSEBUTTON_4 },
 		{ VK_XBUTTON2, NKCODE_EXT_MOUSEBUTTON_5 },
+		{ VK_SNAPSHOT, NKCODE_EXT_PRINTSCREEN },
 	};
 
 	void Init() {
-		RAWINPUTDEVICE dev[3];
-		memset(dev, 0, sizeof(dev));
+		RAWINPUTDEVICE dev[3]{};
 
 		dev[0].usUsagePage = HID_USAGE_PAGE_GENERIC;
 		dev[0].usUsage = HID_USAGE_GENERIC_KEYBOARD;
@@ -196,13 +196,12 @@ namespace WindowsRawInput {
 		dev[2].dwFlags = 0;
 
 		if (!RegisterRawInputDevices(dev, 3, sizeof(RAWINPUTDEVICE))) {
-			WARN_LOG(SYSTEM, "Unable to register raw input devices: %s", GetLastErrorMsg().c_str());
+			WARN_LOG(Log::System, "Unable to register raw input devices: %s", GetLastErrorMsg().c_str());
 		}
 	}
 
 	bool UpdateMenuActive() {
-		MENUBARINFO info;
-		memset(&info, 0, sizeof(info));
+		MENUBARINFO info{};
 		info.cbSize = sizeof(info);
 		if (GetMenuBarInfo(MainWindow::GetHWND(), OBJID_MENU, 0, &info) != 0) {
 			menuActive = info.fBarFocused != FALSE;
@@ -443,9 +442,7 @@ namespace WindowsRawInput {
 	}
 
 	void Shutdown() {
-		if (rawInputBuffer) {
-			free(rawInputBuffer);
-		}
+		free(rawInputBuffer);
 		rawInputBuffer = 0;
 	}
 };

@@ -52,6 +52,7 @@
 #include "sceMp3.h"
 #include "sceNet.h"
 #include "sceNetAdhoc.h"
+#include "sceNetAdhocMatching.h"
 #include "sceNp.h"
 #include "sceMpeg.h"
 #include "sceOpenPSID.h"
@@ -64,6 +65,7 @@
 #include "scePsmf.h"
 #include "sceRtc.h"
 #include "sceSas.h"
+#include "sceSircs.h"
 #include "sceSsl.h"
 #include "sceUmd.h"
 #include "sceUsb.h"
@@ -79,6 +81,9 @@
 #include "sceSfmt19937.h"
 #include "sceG729.h"
 #include "KUBridge.h"
+#include "sceNetInet.h"
+#include "sceNetResolver.h"
+// #include "sceNp2.h"
 
 #define N(s) s
 
@@ -96,7 +101,7 @@ const HLEFunction FakeSysCalls[] = {
 	{NID_EXTENDRETURN, __KernelReturnFromExtendStack, "__KernelReturnFromExtendStack", 'x', ""},
 	{NID_MODULERETURN, __KernelReturnFromModuleFunc, "__KernelReturnFromModuleFunc", 'x', ""},
 	{NID_IDLE, __KernelIdle, "_sceKernelIdle", 'x', ""},
-	{NID_GPUREPLAY, __KernelGPUReplay, "__KernelGPUReplay", 'x', ""},
+	{NID_GPUREPLAY, &WrapI_V<__KernelGPUReplay>, "__KernelGPUReplay", 'x', ""},
 	{NID_HLECALLRETURN, HLEReturnFromMipsCall, "HLEReturnFromMipsCall", 'x', ""},
 };
 
@@ -235,7 +240,13 @@ void RegisterAllModules() {
 	Register_sceSasCore();
 	Register_sceFont();
 	Register_sceNet();
+	Register_sceNetResolver();
+	Register_sceNetInet();
+	Register_sceNetApctl();
 	Register_sceNetAdhoc();
+	Register_sceNetAdhocMatching();
+	Register_sceNetAdhocDiscover();
+	Register_sceNetAdhocctl();
 	Register_sceRtc();
 	Register_sceWlanDrv();
 	Register_sceMpeg();
@@ -307,6 +318,10 @@ void RegisterAllModules() {
 	Register_sceDdrdb();
 	Register_mp4msv();
 	Register_InterruptManagerForKernel();
+	Register_sceSircs();
+	// Not ready to enable this due to apparent softlocks in Patapon 3.
+	// Register_sceNpMatching2();
+
 	// add new modules here.
 }
 

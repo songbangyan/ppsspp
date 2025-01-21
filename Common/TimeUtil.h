@@ -1,6 +1,7 @@
 #pragma once
-
 #include <cstdint>
+
+void TimeInit();
 
 // Seconds.
 double time_now_d();
@@ -17,23 +18,46 @@ double from_time_raw_relative(uint64_t raw_time);
 double time_now_unix_utc();
 
 // Sleep. Does not necessarily have millisecond granularity, especially on Windows.
-void sleep_ms(int ms);
+// Requires a "reason" since sleeping generally should be very sparingly used. This
+// can be logged if desired to figure out where we're wasting time.
+void sleep_ms(int ms, const char *reason);
+
+// Precise sleep. Can consume a little bit of CPU on Windows at least.
+void sleep_precise(double seconds);
 
 // Yield. Signals that this thread is busy-waiting but wants to allow other hyperthreads to run.
 void yield();
 
-void GetTimeFormatted(char formattedTime[13]);
+void GetCurrentTimeFormatted(char formattedTime[13]);
 
-// Rust-style Instant for clear and easy timing.
+// Most accurate timer possible - no extra double conversions. Only for spans.
 class Instant {
 public:
 	static Instant Now() {
-		return Instant(time_now_d());
+		return Instant();
 	}
-	double Elapsed() const {
-		return time_now_d() - instantTime_;
+	double ElapsedSeconds() const;
+	int64_t ElapsedNanos() const;
+private:
+	Instant();
+	uint64_t nativeStart_;
+#ifndef _WIN32
+	int64_t nsecs_;
+#endif
+};
+
+class TimeCollector {
+public:
+	TimeCollector(double *target, bool enable) : target_(enable ? target : nullptr) {
+		if (enable)
+			startTime_ = time_now_d();
+	}
+	~TimeCollector() {
+		if (target_) {
+			*target_ += time_now_d() - startTime_;
+		}
 	}
 private:
-	explicit Instant(double initTime) : instantTime_(initTime) {}
-	double instantTime_;
+	double startTime_;
+	double *target_;
 };

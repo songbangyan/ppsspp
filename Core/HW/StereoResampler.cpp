@@ -33,34 +33,22 @@
 #define CONTROL_AVG     32.0f
 
 #include "ppsspp_config.h"
+#include <algorithm>
 #include <cstring>
 #include <atomic>
 
 #include "Common/Common.h"
 #include "Common/System/System.h"
-#include "Common/Math/math_util.h"
-#include "Common/Serialize/Serializer.h"
 #include "Common/Log.h"
+#include "Common/Math/SIMDHeaders.h"
 #include "Common/TimeUtil.h"
 #include "Core/Config.h"
 #include "Core/ConfigValues.h"
 #include "Core/HW/StereoResampler.h"
-#include "Core/HLE/__sceAudio.h"
 #include "Core/Util/AudioFormat.h"  // for clamp_u8
 #include "Core/System.h"
 
-#ifdef _M_SSE
-#include <emmintrin.h>
-#endif
-#if PPSSPP_ARCH(ARM_NEON)
-#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
-#include <arm64_neon.h>
-#else
-#include <arm_neon.h>
-#endif
-#endif
-
-StereoResampler::StereoResampler()
+StereoResampler::StereoResampler() noexcept
 		: m_maxBufsize(MAX_BUFSIZE_DEFAULT)
 	  , m_targetBufsize(TARGET_BUFSIZE_DEFAULT) {
 	// Need to have space for the worst case in case it changes.
@@ -73,7 +61,7 @@ StereoResampler::StereoResampler()
 	// If framerate is "close"...
 	if (refresh != 60.0f && refresh > 50.0f && refresh < 70.0f) {
 		int input_sample_rate = (int)(44100 * (refresh / 60.0f));
-		INFO_LOG(AUDIO, "StereoResampler: Adjusting target sample rate to %dHz", input_sample_rate);
+		INFO_LOG(Log::Audio, "StereoResampler: Adjusting target sample rate to %dHz", input_sample_rate);
 		m_input_sample_rate = input_sample_rate;
 	}
 
@@ -165,7 +153,13 @@ void StereoResampler::Clear() {
 }
 
 inline int16_t MixSingleSample(int16_t s1, int16_t s2, uint16_t frac) {
-	return s1 + (((s2 - s1) * frac) >> 16);
+	int32_t value = s1 + (((s2 - s1) * frac) >> 16);
+	if (value < -32767)
+		return -32767;
+	else if (value > 32767)
+		return 32767;
+	else
+		return (int16_t)value;
 }
 
 // Executed from sound stream thread, pulling sound out of the buffer.

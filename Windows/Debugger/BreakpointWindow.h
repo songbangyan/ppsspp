@@ -3,12 +3,14 @@
 #include "Common/CommonWindows.h"
 #include "Common/CommonTypes.h"
 #include "Core/Debugger/DebugInterface.h"
-#include "Core/Debugger/Breakpoints.h"
+#include "Core/MIPS/MIPSDebugInterface.h"
 
-class BreakpointWindow
-{
+struct BreakPoint;
+struct MemCheck;
+
+class BreakpointWindow {
 	HWND parentHwnd;
-	DebugInterface* cpu;
+	MIPSDebugInterface *cpu;
 
 	bool memory;
 	bool read;
@@ -29,7 +31,7 @@ class BreakpointWindow
 	INT_PTR DlgFunc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam);
 
 public:
-	BreakpointWindow(HWND parent, DebugInterface* cpu): cpu(cpu)
+	BreakpointWindow(HWND parent, MIPSDebugInterface* cpu): cpu(cpu)
 	{
 		parentHwnd = parent;
 		memory = true;

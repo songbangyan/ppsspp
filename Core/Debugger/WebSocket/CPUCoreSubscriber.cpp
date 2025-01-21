@@ -17,6 +17,7 @@
 
 #include "Common/StringUtils.h"
 #include "Core/Core.h"
+#include "Core/System.h"
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/Breakpoints.h"
 #include "Core/Debugger/WebSocket/CPUCoreSubscriber.h"
@@ -71,7 +72,7 @@ void WebSocketCPUStepping(DebuggerRequest &req) {
 		return req.Fail("CPU not started");
 	}
 	if (!Core_IsStepping() && Core_IsActive()) {
-		Core_EnableStepping(true, "cpu.stepping", 0);
+		Core_Break("cpu.stepping", 0);
 	}
 }
 
@@ -88,11 +89,11 @@ void WebSocketCPUResume(DebuggerRequest &req) {
 		return req.Fail("CPU not stepping");
 	}
 
-	CBreakPoints::SetSkipFirst(currentMIPS->pc);
+	g_breakpoints.SetSkipFirst(currentMIPS->pc);
 	if (currentMIPS->inDelaySlot) {
-		Core_DoSingleStep();
+		Core_RequestCPUStep(CPUStepType::Into, 1);
 	}
-	Core_EnableStepping(false);
+	Core_Resume();
 }
 
 // Request the current CPU status (cpu.status)
@@ -134,16 +135,16 @@ void WebSocketCPUGetAllRegs(DebuggerRequest &req) {
 	JsonWriter &json = req.Respond();
 
 	json.pushArray("categories");
-	for (int c = 0; c < cpuDebug->GetNumCategories(); ++c) {
+	for (int c = 0; c < MIPSDebugInterface::GetNumCategories(); ++c) {
 		json.pushDict();
 		json.writeInt("id", c);
-		json.writeString("name", cpuDebug->GetCategoryName(c));
+		json.writeString("name", MIPSDebugInterface::GetCategoryName(c));
 
-		int total = cpuDebug->GetNumRegsInCategory(c);
+		int total = MIPSDebugInterface::GetNumRegsInCategory(c);
 
 		json.pushArray("registerNames");
 		for (int r = 0; r < total; ++r)
-			json.writeString(cpuDebug->GetRegName(c, r));
+			json.writeString(MIPSDebugInterface::GetRegName(c, r));
 		if (c == 0) {
 			json.writeString("pc");
 			json.writeString("hi");
@@ -219,7 +220,7 @@ static DebuggerRegType ValidateRegName(DebuggerRequest &req, const std::string &
 }
 
 static DebuggerRegType ValidateCatReg(DebuggerRequest &req, int *cat, int *reg) {
-	const char *name = req.data.getString("name", nullptr);
+	const char *name = req.data.getStringOr("name", nullptr);
 	if (name)
 		return ValidateRegName(req, name, cat, reg);
 
@@ -402,10 +403,10 @@ void WebSocketCPUEvaluate(DebuggerRequest &req) {
 
 	u32 val;
 	PostfixExpression postfix;
-	if (!cpuDebug->initExpression(exp.c_str(), postfix)) {
+	if (!initExpression(cpuDebug, exp.c_str(), postfix)) {
 		return req.Fail(StringFromFormat("Could not parse expression syntax: %s", getExpressionError()));
 	}
-	if (!cpuDebug->parseExpression(postfix, val)) {
+	if (!parseExpression(cpuDebug, postfix, val)) {
 		return req.Fail(StringFromFormat("Could not evaluate expression: %s", getExpressionError()));
 	}
 

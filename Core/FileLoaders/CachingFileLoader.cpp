@@ -15,9 +15,9 @@
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
+#include <algorithm>
 #include <cstring>
 #include <thread>
-#include <algorithm>
 
 #include "Common/Thread/ThreadUtil.h"
 #include "Common/TimeUtil.h"
@@ -110,7 +110,7 @@ void CachingFileLoader::ShutdownCache() {
 	// We can't delete while the thread is running, so have to wait.
 	// This should only happen from the menu.
 	while (aheadThreadRunning_) {
-		sleep_ms(1);
+		sleep_ms(1, "shutdown-cache-poll");
 	}
 	if (aheadThread_.joinable())
 		aheadThread_.join();

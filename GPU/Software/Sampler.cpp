@@ -21,26 +21,13 @@
 #include "Common/Common.h"
 #include "Common/Data/Convert/ColorConv.h"
 #include "Common/LogReporting.h"
-#include "Common/StringUtils.h"
+#include "Common/Math/SIMDHeaders.h"
 #include "Core/Config.h"
 #include "GPU/Common/TextureDecoder.h"
-#include "GPU/GPUState.h"
 #include "GPU/Software/BinManager.h"
 #include "GPU/Software/Rasterizer.h"
 #include "GPU/Software/RasterizerRegCache.h"
 #include "GPU/Software/Sampler.h"
-
-#if defined(_M_SSE)
-#include <emmintrin.h>
-#endif
-
-#if PPSSPP_ARCH(ARM_NEON)
-#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
-#include <arm64_neon.h>
-#else
-#include <arm_neon.h>
-#endif
-#endif
 
 using namespace Math3D;
 using namespace Rasterizer;
@@ -314,7 +301,7 @@ static inline u32 LookupColor(unsigned int index, unsigned int level, const Samp
 		return samplerID.cached.clut32[index + clutSharingOffset];
 
 	default:
-		ERROR_LOG_REPORT(G3D, "Software: Unsupported palette format: %x", samplerID.ClutFmt());
+		ERROR_LOG_REPORT(Log::G3D, "Software: Unsupported palette format: %x", samplerID.ClutFmt());
 		return 0;
 	}
 }
@@ -434,7 +421,7 @@ inline static Nearest4 SOFTRAST_CALL SampleNearest(const int u[N], const int v[N
 		return res;
 
 	default:
-		ERROR_LOG_REPORT(G3D, "Software: Unsupported texture format: %x", samplerID.TexFmt());
+		ERROR_LOG_REPORT(Log::G3D, "Software: Unsupported texture format: %x", samplerID.TexFmt());
 		memset(res.v, 0, sizeof(res.v));
 		return res;
 	}

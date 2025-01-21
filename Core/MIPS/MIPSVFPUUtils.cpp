@@ -16,13 +16,11 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include <cstdint>
-#include <limits>
-#include <cstdio>
 #include <cstring>
 
 #include "Common/BitScan.h"
-#include "Common/CommonFuncs.h"
 #include "Common/File/VFS/VFS.h"
+#include "Common/Math/SIMDHeaders.h"
 #include "Common/StringUtils.h"
 #include "Core/Reporting.h"
 #include "Core/MIPS/MIPS.h"
@@ -97,26 +95,26 @@ int GetMatrixName(int matrix, MatrixSize msize, int column, int row, bool transp
 	switch (msize) {
 	case M_4x4:
 		if (row || column) {
-			ERROR_LOG(JIT, "GetMatrixName: Invalid row %i or column %i for size %i", row, column, msize);
+			ERROR_LOG(Log::JIT, "GetMatrixName: Invalid row %i or column %i for size %i", row, column, msize);
 		}
 		break;
 
 	case M_3x3:
 		if (row & ~2) {
-			ERROR_LOG(JIT, "GetMatrixName: Invalid row %i for size %i", row, msize);
+			ERROR_LOG(Log::JIT, "GetMatrixName: Invalid row %i for size %i", row, msize);
 		}
 		if (column & ~2) {
-			ERROR_LOG(JIT, "GetMatrixName: Invalid col %i for size %i", column, msize);
+			ERROR_LOG(Log::JIT, "GetMatrixName: Invalid col %i for size %i", column, msize);
 		}
 		name |= (row << 6) | column;
 		break;
 
 	case M_2x2:
 		if (row & ~2) {
-			ERROR_LOG(JIT, "GetMatrixName: Invalid row %i for size %i", row, msize);
+			ERROR_LOG(Log::JIT, "GetMatrixName: Invalid row %i for size %i", row, msize);
 		}
 		if (column & ~2) {
-			ERROR_LOG(JIT, "GetMatrixName: Invalid col %i for size %i", column, msize);
+			ERROR_LOG(Log::JIT, "GetMatrixName: Invalid col %i for size %i", column, msize);
 		}
 		name |= (row << 5) | column;
 		break;
@@ -301,7 +299,7 @@ void WriteMatrix(const float *rd, MatrixSize size, int reg) {
 	}
 
 	if (currentMIPS->VfpuWriteMask() != 0) {
-		ERROR_LOG_REPORT(CPU, "Write mask used with vfpu matrix instruction.");
+		ERROR_LOG_REPORT(Log::CPU, "Write mask used with vfpu matrix instruction.");
 	}
 
 	// The voffset ordering is now integrated in these formulas,
@@ -714,9 +712,7 @@ static float vfpu_dot_cpp(const float a[4], const float b[4]) {
 	return result.f;
 }
 
-#if defined(__SSE2__)
-
-#include <emmintrin.h>
+#if PPSSPP_ARCH(SSE2)
 
 static inline __m128i mulhi32x4(__m128i a, __m128i b) {
 	__m128i m02 = _mm_mul_epu32(a, b);
@@ -876,10 +872,10 @@ static float vfpu_dot_sse2(const float a[4], const float b[4])
 	return result.f;
 }
 
-#endif // defined(__SSE2__)
+#endif // PPSSPP_ARCH(SSE2)
 
 float vfpu_dot(const float a[4], const float b[4]) {
-#if defined(__SSE2__)
+#if PPSSPP_ARCH(SSE2)
 	return vfpu_dot_sse2(a, b);
 #else
 	return vfpu_dot_cpp(a, b);
@@ -998,16 +994,15 @@ static inline bool load_vfpu_table(T *&ptr, const char *filename, size_t expecte
 #endif
 	if (ptr) return true; // Already loaded.
 	size_t size = 0u;
-	INFO_LOG(CPU, "Loading '%s'...", filename);
+	INFO_LOG(Log::CPU, "Loading '%s'...", filename);
 	ptr = reinterpret_cast<decltype(&*ptr)>(g_VFS.ReadFile(filename, &size));
-	if(!ptr || size != expected_size)
-	{
-		ERROR_LOG(CPU, "Error loading '%s' (size=%u, expected: %u)", filename, (unsigned)size, (unsigned)expected_size);
-		if(ptr) delete[] ptr;
+	if (!ptr || size != expected_size) {
+		ERROR_LOG(Log::CPU, "Error loading '%s' (size=%u, expected: %u)", filename, (unsigned)size, (unsigned)expected_size);
+		delete[] ptr;
 		ptr = nullptr;
 		return false;
 	}
-	INFO_LOG(CPU, "Successfully loaded '%s'", filename);
+	INFO_LOG(Log::CPU, "Successfully loaded '%s'", filename);
 	return true;
 }
 

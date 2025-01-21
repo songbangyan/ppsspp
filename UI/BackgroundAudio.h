@@ -11,7 +11,7 @@
 class AT3PlusReader;
 
 struct Sample {
-	// data must be new-ed.
+	// data must be new[]-ed.
 	Sample(int16_t *data, int channels, int length, int rateInHz) : channels_(channels), data_(data), length_(length), rateInHz_(rateInHz) {}
 	~Sample() {
 		delete[] data_;
@@ -27,8 +27,7 @@ struct Sample {
 // Mixer for things played on top of everything.
 class SoundEffectMixer {
 public:
-	void LoadSamples();
-
+	void Init();
 	void Mix(int16_t *buffer, int sz, int sampleRateHz);
 	void Play(UI::UISound sfx, float volume);
 
@@ -44,6 +43,8 @@ public:
 		bool done;
 	};
 
+	// This can be called on a thread.
+	void LoadSamplesOnThread();
 private:
 	std::mutex mutex_;
 	std::vector<PlayInstance> queue_;

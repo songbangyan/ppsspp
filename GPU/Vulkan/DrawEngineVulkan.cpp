@@ -16,22 +16,13 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include "ppsspp_config.h"
-#include <algorithm>
 #include <functional>
 
-#include "Common/Data/Convert/SmallDataConvert.h"
 #include "Common/Profiler/Profiler.h"
 #include "Common/GPU/Vulkan/VulkanRenderManager.h"
 
 #include "Common/Log.h"
-#include "Common/MemoryUtil.h"
-#include "Common/TimeUtil.h"
-#include "Core/MemMap.h"
-#include "Core/System.h"
-#include "Core/Config.h"
-#include "Core/CoreTiming.h"
 
-#include "GPU/Math3D.h"
 #include "GPU/GPUState.h"
 #include "GPU/ge_constants.h"
 
@@ -44,13 +35,11 @@
 #include "GPU/Common/SoftwareTransformCommon.h"
 #include "GPU/Common/DrawEngineCommon.h"
 #include "GPU/Common/ShaderUniforms.h"
-#include "GPU/Debugger/Debugger.h"
 #include "GPU/Vulkan/DrawEngineVulkan.h"
 #include "GPU/Vulkan/TextureCacheVulkan.h"
 #include "GPU/Vulkan/ShaderManagerVulkan.h"
 #include "GPU/Vulkan/PipelineManagerVulkan.h"
 #include "GPU/Vulkan/FramebufferManagerVulkan.h"
-#include "GPU/Vulkan/GPU_Vulkan.h"
 
 using namespace PPSSPP_VK;
 
@@ -62,11 +51,6 @@ DrawEngineVulkan::DrawEngineVulkan(Draw::DrawContext *draw)
 	: draw_(draw) {
 	decOptions_.expandAllWeightsToFloat = false;
 	decOptions_.expand8BitNormalsToFloat = false;
-#if PPSSPP_PLATFORM(MAC) || PPSSPP_PLATFORM(IOS)
-	decOptions_.alignOutputToWord = true;
-#endif
-
-	indexGen.Setup(decIndex_);
 }
 
 void DrawEngineVulkan::InitDeviceObjects() {
@@ -169,7 +153,13 @@ void DrawEngineVulkan::DeviceRestore(Draw::DrawContext *draw) {
 }
 
 void DrawEngineVulkan::BeginFrame() {
+	DrawEngineCommon::BeginFrame();
+
 	lastPipeline_ = nullptr;
+
+	// These will be re-bound if needed, let's not let old bindings linger around too long.
+	boundDepal_ = VK_NULL_HANDLE;
+	boundSecondary_ = VK_NULL_HANDLE;
 
 	// pushUBO is the thin3d push pool, don't need to BeginFrame again.
 	pushVertex_->BeginFrame();
@@ -178,11 +168,15 @@ void DrawEngineVulkan::BeginFrame() {
 	tessDataTransferVulkan->SetPushPool(pushUBO_);
 
 	DirtyAllUBOs();
+
+	AssertEmpty();
 }
 
 void DrawEngineVulkan::EndFrame() {
 	stats_.pushVertexSpaceUsed = (int)pushVertex_->GetUsedThisFrame();
 	stats_.pushIndexSpaceUsed = (int)pushIndex_->GetUsedThisFrame();
+
+	AssertEmpty();
 }
 
 void DrawEngineVulkan::DirtyAllUBOs() {
@@ -213,8 +207,14 @@ void DrawEngineVulkan::Invalidate(InvalidationCallbackFlags flags) {
 }
 
 // The inline wrapper in the header checks for numDrawCalls_ == 0
-void DrawEngineVulkan::DoFlush() {
+void DrawEngineVulkan::Flush() {
+	if (!numDrawVerts_) {
+		return;
+	}
+
 	VulkanRenderManager *renderManager = (VulkanRenderManager *)draw_->GetNativeObject(Draw::NativeObject::RENDER_MANAGER);
+
+	renderManager->AssertInRenderPass();
 
 	PROFILE_THIS_SCOPE("Flush");
 
@@ -224,6 +224,7 @@ void DrawEngineVulkan::DoFlush() {
 	if (gstate_c.IsDirty(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS) && !gstate.isModeClear() && gstate.isTextureMapEnabled()) {
 		textureCache_->SetTexture();
 		gstate_c.Clean(DIRTY_TEXTURE_IMAGE | DIRTY_TEXTURE_PARAMS);
+		// NOTE: After this is set, we MUST call ApplyTexture before returning.
 		textureNeedsApply = true;
 	} else if (gstate.getTextureAddress(0) == (gstate.getFrameBufRawAddress() | 0x04000000)) {
 		// This catches the case of clearing a texture.
@@ -232,22 +233,25 @@ void DrawEngineVulkan::DoFlush() {
 
 	GEPrimitiveType prim = prevPrim_;
 
-	// Always use software for flat shading to fix the provoking index.
-	bool useHWTransform = CanUseHardwareTransform(prim) && (tess || gstate.getShadeMode() != GE_SHADE_FLAT);
+	// Always use software for flat shading to fix the provoking index
+	// if the provoking vertex extension is not available.
+	bool provokingVertexOk = (tess || gstate.getShadeMode() != GE_SHADE_FLAT);
+	if (renderManager->GetVulkanContext()->GetDeviceFeatures().enabled.provokingVertex.provokingVertexLast) {
+		provokingVertexOk = true;
+	}
+	bool useHWTransform = CanUseHardwareTransform(prim) && provokingVertexOk;
 
-	uint32_t ibOffset;
-	uint32_t vbOffset;
-	
 	// The optimization to avoid indexing isn't really worth it on Vulkan since it means creating more pipelines.
 	// This could be avoided with the new dynamic state extensions, but not available enough on mobile.
 	const bool forceIndexed = draw_->GetDeviceCaps().verySlowShaderCompiler;
 
 	if (useHWTransform) {
+		uint32_t vbOffset;
+
 		VkBuffer vbuf = VK_NULL_HANDLE;
-		VkBuffer ibuf = VK_NULL_HANDLE;
-		if (decOptions_.applySkinInDecode && (lastVType_ & GE_VTYPE_WEIGHT_MASK)) {
+		if (applySkinInDecode_ && (lastVType_ & GE_VTYPE_WEIGHT_MASK)) {
 			// If software skinning, we're predecoding into "decoded". So make sure we're done, then push that content.
-			DecodeVerts(decoded_);
+			DecodeVerts(dec_, decoded_);
 			VkDeviceSize size = numDecodedVerts_ * dec_->GetDecVtxFmt().stride;
 			u8 *dest = (u8 *)pushVertex_->Allocate(size, 4, &vbuf, &vbOffset);
 			memcpy(dest, decoded_, size);
@@ -256,7 +260,7 @@ void DrawEngineVulkan::DoFlush() {
 			int vertsToDecode = ComputeNumVertsToDecode();
 			// Decode directly into the pushbuffer
 			u8 *dest = pushVertex_->Allocate(vertsToDecode * dec_->GetDecVtxFmt().stride, 4, &vbuf, &vbOffset);
-			DecodeVerts(dest);
+			DecodeVerts(dec_, dest);
 		}
 
 		int vertexCount;
@@ -289,7 +293,7 @@ void DrawEngineVulkan::DoFlush() {
 			VulkanFragmentShader *fshader = nullptr;
 			VulkanGeometryShader *gshader = nullptr;
 
-			shaderManager_->GetShaders(prim, dec_, &vshader, &fshader, &gshader, pipelineState_, true, useHWTessellation_, decOptions_.expandAllWeightsToFloat, decOptions_.applySkinInDecode);
+			shaderManager_->GetShaders(prim, dec_, &vshader, &fshader, &gshader, pipelineState_, true, useHWTessellation_, decOptions_.expandAllWeightsToFloat, applySkinInDecode_);
 			_dbg_assert_msg_(vshader->UseHWTransform(), "Bad vshader");
 			VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &dec_->decFmt, vshader, fshader, gshader, true, 0, framebufferManager_->GetMSAALevel(), false);
 			if (!pipeline || !pipeline->pipeline) {
@@ -328,22 +332,30 @@ void DrawEngineVulkan::DoFlush() {
 		PackedDescriptor *descriptors = renderManager->PushDescriptorSet(descCount, &descSetIndex);
 		descriptors[0].image.view = imageView;
 		descriptors[0].image.sampler = sampler;
+
 		descriptors[1].image.view = boundSecondary_;
 		descriptors[1].image.sampler = samplerSecondaryNearest_;
+
 		descriptors[2].image.view = boundDepal_;
 		descriptors[2].image.sampler = (boundDepal_ && boundDepalSmoothed_) ? samplerSecondaryLinear_ : samplerSecondaryNearest_;
+
 		descriptors[3].buffer.buffer = baseBuf;
 		descriptors[3].buffer.range = sizeof(UB_VS_FS_Base);
+		descriptors[3].buffer.offset = 0;
+
 		descriptors[4].buffer.buffer = lightBuf;
 		descriptors[4].buffer.range = sizeof(UB_VS_Lights);
+		descriptors[4].buffer.offset = 0;
+
 		descriptors[5].buffer.buffer = boneBuf;
 		descriptors[5].buffer.range = sizeof(UB_VS_Bones);
+		descriptors[5].buffer.offset = 0;
 		if (tess) {
 			const VkDescriptorBufferInfo *bufInfo = tessDataTransferVulkan->GetBufferInfo();
 			for (int j = 0; j < 3; j++) {
 				descriptors[j + 6].buffer.buffer = bufInfo[j].buffer;
-				descriptors[j + 6].buffer.offset = bufInfo[j].offset;
 				descriptors[j + 6].buffer.range = bufInfo[j].range;
+				descriptors[j + 6].buffer.offset = bufInfo[j].offset;
 			}
 		}
 		// TODO: Can we avoid binding all three when not needed? Same below for hardware transform.
@@ -352,23 +364,27 @@ void DrawEngineVulkan::DoFlush() {
 			baseUBOOffset, lightUBOOffset, boneUBOOffset,
 		};
 		if (useElements) {
-			if (!ibuf) {
-				ibOffset = (uint32_t)pushIndex_->Push(decIndex_, sizeof(uint16_t) * vertexCount, 4, &ibuf);
-			}
+			VkBuffer ibuf;
+			u32 ibOffset = (uint32_t)pushIndex_->Push(decIndex_, sizeof(uint16_t) * vertexCount, 4, &ibuf);
 			renderManager->DrawIndexed(descSetIndex, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, ibuf, ibOffset, vertexCount, 1);
 		} else {
 			renderManager->Draw(descSetIndex, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, vertexCount);
 		}
+		if (useDepthRaster_) {
+			DepthRasterTransform(prim, dec_, dec_->VertexType(), vertexCount);
+		}
 	} else {
 		PROFILE_THIS_SCOPE("soft");
-		if (!decOptions_.applySkinInDecode) {
-			decOptions_.applySkinInDecode = true;
-			lastVType_ |= (1 << 26);
-			dec_ = GetVertexDecoder(lastVType_);
+		VertexDecoder *swDec = dec_;
+		if (swDec->nweights != 0) {
+			u32 withSkinning = lastVType_ | (1 << 26);
+			if (withSkinning != lastVType_) {
+				swDec = GetVertexDecoder(withSkinning);
+			}
 		}
 		int prevDecodedVerts = numDecodedVerts_;
 
-		DecodeVerts(decoded_);
+		DecodeVerts(swDec, decoded_);
 		int vertexCount = DecodeInds();
 
 		bool hasColor = (lastVType_ & GE_VTYPE_COL_MASK) != GE_VTYPE_COL_NONE;
@@ -380,6 +396,8 @@ void DrawEngineVulkan::DoFlush() {
 
 		gpuStats.numUncachedVertsDrawn += vertexCount;
 		prim = IndexGenerator::GeneralPrim((GEPrimitiveType)drawInds_[0].prim);
+
+		// At this point, the output is always an index triangle/line/point list, no strips/fans.
 
 		u16 *inds = decIndex_;
 		SoftwareTransformResult result{};
@@ -393,7 +411,14 @@ void DrawEngineVulkan::DoFlush() {
 		// do not respect scissor rects.
 		params.allowClear = framebufferManager_->UseBufferedRendering();
 		params.allowSeparateAlphaClear = false;
-		params.provokeFlatFirst = true;
+
+		if (gstate.getShadeMode() == GE_SHADE_FLAT) {
+			if (!renderManager->GetVulkanContext()->GetDeviceFeatures().enabled.provokingVertex.provokingVertexLast) {
+				// If we can't have the hardware do it, we need to rotate the index buffer to simulate a different provoking vertex.
+				// We do this before line expansion etc.
+				IndexBufferProvokingLastToFirst(prim, inds, vertexCount);
+			}
+		}
 		params.flippedY = true;
 		params.usesHalfZ = true;
 
@@ -409,20 +434,29 @@ void DrawEngineVulkan::DoFlush() {
 			UpdateCachedViewportState(vpAndScissor);
 		}
 
+		// At this point, rect and line primitives are still preserved as such. So, it's the best time to do software depth raster.
+		// We could piggyback on the viewport transform below, but it gets complicated since it's different per-backend. Which we really
+		// should clean up one day...
+		if (useDepthRaster_) {
+			DepthRasterPredecoded(prim, decoded_, numDecodedVerts_, swDec, vertexCount);
+		}
+
 		SoftwareTransform swTransform(params);
 
 		const Lin::Vec3 trans(gstate_c.vpXOffset, gstate_c.vpYOffset, gstate_c.vpZOffset * 0.5f + 0.5f);
 		const Lin::Vec3 scale(gstate_c.vpWidthScale, gstate_c.vpHeightScale, gstate_c.vpDepthScale * 0.5f);
 		swTransform.SetProjMatrix(gstate.projMatrix, gstate_c.vpWidth < 0, gstate_c.vpHeight < 0, trans, scale);
 
-		swTransform.Transform(prim, dec_->VertexType(), dec_->GetDecVtxFmt(), numDecodedVerts_, &result);
+		swTransform.Transform(prim, swDec->VertexType(), swDec->GetDecVtxFmt(), numDecodedVerts_, &result);
+
 		// Non-zero depth clears are unusual, but some drivers don't match drawn depth values to cleared values.
 		// Games sometimes expect exact matches (see #12626, for example) for equal comparisons.
 		if (result.action == SW_CLEAR && everUsedEqualDepth_ && gstate.isClearModeDepthMask() && result.depth > 0.0f && result.depth < 1.0f)
 			result.action = SW_NOT_READY;
+
 		if (result.action == SW_NOT_READY) {
-			swTransform.DetectOffsetTexture(numDecodedVerts_);
-			swTransform.BuildDrawingParams(prim, vertexCount, dec_->VertexType(), inds, numDecodedVerts_, &result);
+			// decIndex_ here is always equal to inds currently, but it may not be in the future.
+			swTransform.BuildDrawingParams(prim, vertexCount, swDec->VertexType(), inds, RemainingIndices(inds), numDecodedVerts_, VERTEX_BUFFER_MAX, &result);
 		}
 
 		if (result.setSafeSize)
@@ -430,9 +464,11 @@ void DrawEngineVulkan::DoFlush() {
 
 		// Only here, where we know whether to clear or to draw primitives, should we actually set the current framebuffer! Because that gives use the opportunity
 		// to use a "pre-clear" render pass, for high efficiency on tilers.
-		if (result.action == SW_DRAW_PRIMITIVES) {
+		if (result.action == SW_DRAW_INDEXED) {
 			if (textureNeedsApply) {
+				gstate_c.pixelMapped = result.pixelMapped;
 				textureCache_->ApplyTexture();
+				gstate_c.pixelMapped = false;
 				textureCache_->GetVulkanHandles(imageView, sampler);
 				if (imageView == VK_NULL_HANDLE)
 					imageView = (VkImageView)draw_->GetNativeObject(gstate_c.textureIsArray ? Draw::NativeObject::NULL_IMAGEVIEW_ARRAY : Draw::NativeObject::NULL_IMAGEVIEW);
@@ -448,9 +484,9 @@ void DrawEngineVulkan::DoFlush() {
 				VulkanFragmentShader *fshader = nullptr;
 				VulkanGeometryShader *gshader = nullptr;
 
-				shaderManager_->GetShaders(prim, dec_, &vshader, &fshader, &gshader, pipelineState_, false, false, decOptions_.expandAllWeightsToFloat, true);
+				shaderManager_->GetShaders(prim, swDec, &vshader, &fshader, &gshader, pipelineState_, false, false, decOptions_.expandAllWeightsToFloat, true);
 				_dbg_assert_msg_(!vshader->UseHWTransform(), "Bad vshader");
-				VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &dec_->decFmt, vshader, fshader, gshader, false, 0, framebufferManager_->GetMSAALevel(), false);
+				VulkanPipeline *pipeline = pipelineManager_->GetOrCreatePipeline(renderManager, pipelineLayout_, pipelineKey_, &swDec->decFmt, vshader, fshader, gshader, false, 0, framebufferManager_->GetMSAALevel(), false);
 				if (!pipeline || !pipeline->pipeline) {
 					// Already logged, let's bail out.
 					ResetAfterDraw();
@@ -505,33 +541,24 @@ void DrawEngineVulkan::DoFlush() {
 
 			PROFILE_THIS_SCOPE("renderman_q");
 
-			if (result.drawIndexed) {
-				VkBuffer vbuf, ibuf;
-				vbOffset = (uint32_t)pushVertex_->Push(result.drawBuffer, numDecodedVerts_ * sizeof(TransformedVertex), 4, &vbuf);
-				ibOffset = (uint32_t)pushIndex_->Push(inds, sizeof(short) * result.drawNumTrans, 4, &ibuf);
-				renderManager->DrawIndexed(descSetIndex, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, ibuf, ibOffset, result.drawNumTrans, 1);
-			} else {
-				VkBuffer vbuf;
-				vbOffset = (uint32_t)pushVertex_->Push(result.drawBuffer, result.drawNumTrans * sizeof(TransformedVertex), 4, &vbuf);
-				renderManager->Draw(descSetIndex, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, result.drawNumTrans);
-			}
+			VkBuffer vbuf, ibuf;
+			u32 vbOffset = (uint32_t)pushVertex_->Push(result.drawBuffer, numDecodedVerts_ * sizeof(TransformedVertex), 4, &vbuf);
+			u32 ibOffset = (uint32_t)pushIndex_->Push(inds, sizeof(short) * result.drawNumTrans, 4, &ibuf);
+			renderManager->DrawIndexed(descSetIndex, ARRAY_SIZE(dynamicUBOOffsets), dynamicUBOOffsets, vbuf, vbOffset, ibuf, ibOffset, result.drawNumTrans, 1);
 		} else if (result.action == SW_CLEAR) {
 			// Note: we won't get here if the clear is alpha but not color, or color but not alpha.
 			bool clearColor = gstate.isClearModeColorMask();
 			bool clearAlpha = gstate.isClearModeAlphaMask();  // and stencil
 			bool clearDepth = gstate.isClearModeDepthMask();
-			int mask = 0;
+			Draw::Aspect mask = Draw::Aspect::NO_BIT;
 			// The Clear detection takes care of doing a regular draw instead if separate masking
 			// of color and alpha is needed, so we can just treat them as the same.
-			if (clearColor || clearAlpha) mask |= Draw::FBChannel::FB_COLOR_BIT;
-			if (clearDepth) mask |= Draw::FBChannel::FB_DEPTH_BIT;
-			if (clearAlpha) mask |= Draw::FBChannel::FB_STENCIL_BIT;
+			if (clearColor || clearAlpha) mask |= Draw::Aspect::COLOR_BIT;
+			if (clearDepth) mask |= Draw::Aspect::DEPTH_BIT;
+			if (clearAlpha) mask |= Draw::Aspect::STENCIL_BIT;
 			// Note that since the alpha channel and the stencil channel are shared on the PSP,
 			// when we clear alpha, we also clear stencil to the same value.
 			draw_->Clear(mask, result.color, result.depth, result.color >> 24);
-			if (clearColor || clearAlpha) {
-				framebufferManager_->SetColorUpdated(gstate_c.skipDrawReason);
-			}
 			if (gstate_c.Use(GPU_USE_CLEAR_RAM_HACK) && gstate.isClearModeColorMask() && (gstate.isClearModeAlphaMask() || gstate.FrameBufFormat() == GE_FORMAT_565)) {
 				int scissorX1 = gstate.getScissorX1();
 				int scissorY1 = gstate.getScissorY1();
@@ -540,14 +567,13 @@ void DrawEngineVulkan::DoFlush() {
 				framebufferManager_->ApplyClearToMemory(scissorX1, scissorY1, scissorX2, scissorY2, result.color);
 			}
 		}
-		decOptions_.applySkinInDecode = g_Config.bSoftwareSkinning;
 	}
 
 	ResetAfterDrawInline();
 
 	framebufferManager_->SetColorUpdated(gstate_c.skipDrawReason);
 
-	GPUDebug::NotifyDraw();
+	gpuCommon_->NotifyFlush();
 }
 
 void DrawEngineVulkan::ResetAfterDraw() {
@@ -558,7 +584,6 @@ void DrawEngineVulkan::ResetAfterDraw() {
 	vertexCountInDrawCalls_ = 0;
 	decodeIndsCounter_ = 0;
 	decodeVertsCounter_ = 0;
-	decOptions_.applySkinInDecode = g_Config.bSoftwareSkinning;
 	gstate_c.vertexFullAlpha = true;
 }
 

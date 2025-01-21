@@ -30,34 +30,36 @@ bool UIScreen::UseVerticalLayout() const {
 }
 
 void UIScreen::DoRecreateViews() {
-	if (recreateViews_) {
-		std::lock_guard<std::recursive_mutex> guard(screenManager()->inputLock_);
+	if (!recreateViews_) {
+		return;
+	}
 
-		UI::PersistMap persisted;
-		bool persisting = root_ != nullptr;
-		if (persisting) {
-			root_->PersistData(UI::PERSIST_SAVE, "root", persisted);
-		}
+	std::lock_guard<std::recursive_mutex> guard(screenManager()->inputLock_);
 
-		delete root_;
-		root_ = nullptr;
-		CreateViews();
-		UI::View *defaultView = root_ ? root_->GetDefaultFocusView() : nullptr;
-		if (defaultView && defaultView->GetVisibility() == UI::V_VISIBLE) {
-			defaultView->SetFocus();
-		}
-		recreateViews_ = false;
+	UI::PersistMap persisted;
+	bool persisting = root_ != nullptr;
+	if (persisting) {
+		root_->PersistData(UI::PERSIST_SAVE, "root", persisted);
+	}
 
-		if (persisting && root_ != nullptr) {
-			root_->PersistData(UI::PERSIST_RESTORE, "root", persisted);
+	delete root_;
+	root_ = nullptr;
+	CreateViews();
+	UI::View *defaultView = root_ ? root_->GetDefaultFocusView() : nullptr;
+	if (defaultView && defaultView->GetVisibility() == UI::V_VISIBLE) {
+		defaultView->SetFocus();
+	}
+	recreateViews_ = false;
 
-			// Update layout and refocus so things scroll into view.
-			// This is for resizing down, when focused on something now offscreen.
-			UI::LayoutViewHierarchy(*screenManager()->getUIContext(), root_, ignoreInsets_);
-			UI::View *focused = UI::GetFocusedView();
-			if (focused) {
-				root_->SubviewFocused(focused);
-			}
+	if (persisting && root_ != nullptr) {
+		root_->PersistData(UI::PERSIST_RESTORE, "root", persisted);
+
+		// Update layout and refocus so things scroll into view.
+		// This is for resizing down, when focused on something now offscreen.
+		UI::LayoutViewHierarchy(*screenManager()->getUIContext(), root_, ignoreInsets_);
+		UI::View *focused = UI::GetFocusedView();
+		if (focused) {
+			root_->SubviewFocused(focused);
 		}
 	}
 }
@@ -84,11 +86,11 @@ bool UIScreen::key(const KeyInput &key) {
 
 bool UIScreen::UnsyncTouch(const TouchInput &touch) {
 	if (ClickDebug && root_ && (touch.flags & TOUCH_DOWN)) {
-		INFO_LOG(SYSTEM, "Touch down!");
+		INFO_LOG(Log::System, "Touch down!");
 		std::vector<UI::View *> views;
 		root_->Query(touch.x, touch.y, views);
 		for (auto view : views) {
-			INFO_LOG(SYSTEM, "%s", view->DescribeLog().c_str());
+			INFO_LOG(Log::System, "%s", view->DescribeLog().c_str());
 		}
 	}
 
@@ -167,11 +169,11 @@ void UIScreen::update() {
 			break;
 		case QueuedEventType::TOUCH:
 			if (ClickDebug && (ev.touch.flags & TOUCH_DOWN)) {
-				INFO_LOG(SYSTEM, "Touch down!");
+				INFO_LOG(Log::System, "Touch down!");
 				std::vector<UI::View *> views;
 				root_->Query(ev.touch.x, ev.touch.y, views);
 				for (auto view : views) {
-					INFO_LOG(SYSTEM, "%s", view->DescribeLog().c_str());
+					INFO_LOG(Log::System, "%s", view->DescribeLog().c_str());
 				}
 			}
 			touch(ev.touch);
@@ -188,9 +190,9 @@ void UIScreen::deviceLost() {
 		root_->DeviceLost();
 }
 
-void UIScreen::deviceRestored() {
+void UIScreen::deviceRestored(Draw::DrawContext *draw) {
 	if (root_)
-		root_->DeviceRestored(screenManager()->getDrawContext());
+		root_->DeviceRestored(draw);
 }
 
 void UIScreen::SetupViewport() {
@@ -262,7 +264,7 @@ bool UIDialogScreen::key(const KeyInput &key) {
 	bool retval = UIScreen::key(key);
 	if (!retval && (key.flags & KEY_DOWN) && UI::IsEscapeKey(key)) {
 		if (finished_) {
-			ERROR_LOG(SYSTEM, "Screen already finished");
+			ERROR_LOG(Log::System, "Screen already finished");
 		} else {
 			finished_ = true;
 			TriggerFinish(DR_BACK);
@@ -295,13 +297,13 @@ UI::EventReturn UIScreen::OnCancel(UI::EventParams &e) {
 	return UI::EVENT_DONE;
 }
 
-PopupScreen::PopupScreen(std::string title, std::string button1, std::string button2)
+PopupScreen::PopupScreen(std::string_view title, std::string_view button1, std::string_view button2)
 	: title_(title) {
 	auto di = GetI18NCategory(I18NCat::DIALOG);
 	if (!button1.empty())
-		button1_ = di->T(button1.c_str());
+		button1_ = di->T(button1);
 	if (!button2.empty())
-		button2_ = di->T(button2.c_str());
+		button2_ = di->T(button2);
 	alpha_ = 0.0f;  // inherited
 }
 
@@ -385,10 +387,6 @@ void PopupScreen::SetPopupOrigin(const UI::View *view) {
 	popupOrigin_ = view->GetBounds().Center();
 }
 
-void PopupScreen::SetPopupOffset(float y) {
-	offsetY_ = y;
-}
-
 void PopupScreen::TriggerFinish(DialogResult result) {
 	if (CanComplete(result)) {
 		ignoreInput_ = true;
@@ -398,7 +396,7 @@ void PopupScreen::TriggerFinish(DialogResult result) {
 		OnCompleted(result);
 	}
 	// Inform UI that popup close to hide OSK (if visible)
-	System_NotifyUIState("popup_closed");
+	System_NotifyUIEvent(UIEventNotification::POPUP_CLOSED);
 }
 
 void PopupScreen::CreateViews() {
@@ -411,8 +409,18 @@ void PopupScreen::CreateViews() {
 
 	float yres = screenManager()->getUIContext()->GetBounds().h;
 
-	box_ = new LinearLayout(ORIENT_VERTICAL,
-		new AnchorLayoutParams(PopupWidth(), FillVertical() ? yres - 30 : WRAP_CONTENT, dc.GetBounds().centerX(), dc.GetBounds().centerY() + offsetY_, NONE, NONE, true));
+	AnchorLayoutParams *anchorParams;
+	if (!alignTop_) {
+		// Standard centering etc.
+		anchorParams = new AnchorLayoutParams(PopupWidth(), FillVertical() ? yres - 30 : WRAP_CONTENT,
+			dc.GetBounds().centerX(), dc.GetBounds().centerY() + offsetY_, NONE, NONE, true);
+	} else {
+		// Top-aligned, for dialogs where we need to pop a keyboard below.
+		anchorParams = new AnchorLayoutParams(PopupWidth(), FillVertical() ? yres - 30 : WRAP_CONTENT,
+			NONE, 0, NONE, NONE, false);
+	}
+
+	box_ = new LinearLayout(ORIENT_VERTICAL, anchorParams);
 
 	root_->Add(box_);
 	box_->SetBG(dc.theme->popupStyle.background);

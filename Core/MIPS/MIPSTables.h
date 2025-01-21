@@ -18,7 +18,8 @@
 #pragma once
 
 #include <string>
-#include <stdint.h>
+#include <cstdint>
+
 #include "Common/CommonTypes.h"
 #include "Core/MIPS/MIPS.h"
 
@@ -91,6 +92,8 @@
 #define OUT_FT          0x040000000000ULL
 
 #define OUT_VD          0x100000000000ULL
+
+#define IS_SYSCALL      0x200000000000ULL
 
 #ifndef CDECL
 #define CDECL

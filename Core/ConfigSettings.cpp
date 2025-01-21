@@ -4,6 +4,16 @@
 
 #include "Core/ConfigSettings.h"
 #include "Core/ConfigValues.h"
+#include "Core/Config.h"
+
+std::unordered_map<void*, ConfigSetting*>& ConfigSetting::getPtrLUT() {
+	static std::unordered_map<void*, ConfigSetting*> lut;
+	return lut;
+}
+
+bool ConfigSetting::perGame(void *ptr) {
+	return g_Config.bGameSpecific && getPtrLUT().count(ptr) > 0 && getPtrLUT()[ptr]->PerGame();
+}
 
 bool ConfigSetting::Get(const Section *section) const {
 	switch (type_) {
@@ -26,7 +36,7 @@ bool ConfigSetting::Get(const Section *section) const {
 	case TYPE_FLOAT:
 		return section->Get(iniKey_, ptr_.f, cb_.f ? cb_.f() : default_.f);
 	case TYPE_STRING:
-		return section->Get(iniKey_, ptr_.s, cb_.s ? cb_.s() : default_.s);
+		return section->Get(iniKey_, ptr_.s, cb_.s ? cb_.s().c_str() : default_.s);
 	case TYPE_TOUCH_POS:
 	{
 		ConfigTouchPos defaultTouchPos = cb_.touchPos ? cb_.touchPos() : default_.touchPos;

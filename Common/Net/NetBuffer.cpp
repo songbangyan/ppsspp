@@ -1,18 +1,11 @@
 #include "ppsspp_config.h"
-#ifdef _WIN32
-#include <winsock2.h>
-#undef min
-#undef max
-#else
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
+
 #include <algorithm>
 #include <cstring>
+#include "Common/Net/SocketCompat.h"
 
-#ifndef MSG_NOSIGNAL
-// Default value to 0x00 (do nothing) in systems where it's not supported.
-#define MSG_NOSIGNAL 0x00
+#if _MSC_VER
+#pragma warning(disable:4267)
 #endif
 
 #include "Common/File/FileDescriptor.h"
@@ -36,27 +29,32 @@ void RequestProgress::Update(int64_t downloaded, int64_t totalBytes, bool done) 
 
 bool Buffer::FlushSocket(uintptr_t sock, double timeout, bool *cancelled) {
 	static constexpr float CANCEL_INTERVAL = 0.25f;
-	for (size_t pos = 0, end = data_.size(); pos < end; ) {
-		bool ready = false;
-		double endTimeout = time_now_d() + timeout;
-		while (!ready) {
-			if (cancelled && *cancelled)
-				return false;
-			ready = fd_util::WaitUntilReady(sock, CANCEL_INTERVAL, true);
-			if (!ready && time_now_d() > endTimeout) {
-				ERROR_LOG(IO, "FlushSocket timed out");
+
+	data_.iterate_blocks([&](const char *data, size_t size) {
+		for (size_t pos = 0, end = size; pos < end; ) {
+			bool ready = false;
+			double endTimeout = time_now_d() + timeout;
+			while (!ready) {
+				if (cancelled && *cancelled)
+					return false;
+				ready = fd_util::WaitUntilReady(sock, CANCEL_INTERVAL, true);
+				if (!ready && time_now_d() > endTimeout) {
+					ERROR_LOG(Log::IO, "FlushSocket timed out");
+					return false;
+				}
+			}
+			int sent = send(sock, &data[pos], end - pos, MSG_NOSIGNAL);
+			// TODO: Do we need some retry logic here, instead of just giving up?
+			if (sent < 0) {
+				ERROR_LOG(Log::IO, "FlushSocket failed to send: %d", errno);
 				return false;
 			}
+			pos += sent;
 		}
-		int sent = send(sock, &data_[pos], (int)(end - pos), MSG_NOSIGNAL);
-		// TODO: Do we need some retry logic here, instead of just giving up?
-		if (sent < 0) {
-			ERROR_LOG(IO, "FlushSocket failed to send: %d", errno);
-			return false;
-		}
-		pos += sent;
-	}
-	data_.resize(0);
+		return true;
+	});
+
+	data_.clear();
 	return true;
 }
 
@@ -85,16 +83,12 @@ bool Buffer::ReadAllWithProgress(int fd, int knownSize, RequestProgress *progres
 			ready = fd_util::WaitUntilReady(fd, CANCEL_INTERVAL, false);
 		}
 
-		int retval = recv(fd, &buf[0], (int)buf.size(), MSG_NOSIGNAL);
+		int retval = recv(fd, &buf[0], buf.size(), MSG_NOSIGNAL);
 		if (retval == 0) {
 			return true;
 		} else if (retval < 0) {
-#if PPSSPP_PLATFORM(WINDOWS)
-			if (WSAGetLastError() != WSAEWOULDBLOCK) {
-#else
-			if (errno != EWOULDBLOCK) {
-#endif
-				ERROR_LOG(IO, "Error reading from buffer: %i", retval);
+			if (socket_errno != EWOULDBLOCK) {
+				ERROR_LOG(Log::IO, "Error reading from buffer: %i", retval);
 				return false;
 			}
 
@@ -113,10 +107,10 @@ bool Buffer::ReadAllWithProgress(int fd, int knownSize, RequestProgress *progres
 }
 
 int Buffer::Read(int fd, size_t sz) {
-	char buf[1024];
+	char buf[4096];
 	int retval;
 	size_t received = 0;
-	while ((retval = recv(fd, buf, (int)std::min(sz, sizeof(buf)), MSG_NOSIGNAL)) > 0) {
+	while ((retval = recv(fd, buf, std::min(sz, sizeof(buf)), MSG_NOSIGNAL)) > 0) {
 		if (retval < 0) {
 			return retval;
 		}

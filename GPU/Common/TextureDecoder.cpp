@@ -20,33 +20,13 @@
 #include "ext/xxhash.h"
 
 #include "Common/Common.h"
-#include "Common/Data/Convert/ColorConv.h"
-#include "Common/CPUDetect.h"
 #include "Common/Log.h"
+#include "Common/Math/SIMDHeaders.h"
 
-#include "GPU/GPU.h"
 #include "GPU/GPUState.h"
 #include "GPU/Common/TextureDecoder.h"
 
-#ifdef _M_SSE
-#include <emmintrin.h>
-#include <smmintrin.h>
-#endif
-
-#if PPSSPP_ARCH(ARM_NEON)
-#if defined(_MSC_VER) && PPSSPP_ARCH(ARM64)
-#include <arm64_neon.h>
-#else
-#include <arm_neon.h>
-#endif
-#endif
-
-#ifdef __clang__
-// Weird how you can't just use #pragma in a macro.
-#define DO_NOT_VECTORIZE_LOOP _Pragma("clang loop vectorize(disable)")
-#else
-#define DO_NOT_VECTORIZE_LOOP
-#endif
+#include "Common/Math/SIMDHeaders.h"
 
 const u8 textureBitsPerPixel[16] = {
 	16,  //GE_TFMT_5650,

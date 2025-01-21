@@ -86,6 +86,9 @@
     <Filter Include="Ext\libzip">
       <UniqueIdentifier>{1ad7ee67-c496-4709-bf98-cad322fe5d97}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Net">
+      <UniqueIdentifier>{4341253d-564e-490a-9780-179786e7ab2a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp" />
@@ -256,6 +259,9 @@
       <Filter>HW</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Core\HW\SimpleAudioDec.cpp">
+      <Filter>HW</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HW\Atrac3Standalone.cpp">
       <Filter>HW</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Core\HW\StereoResampler.cpp">
@@ -456,6 +462,9 @@
     <ClCompile Include="..\..\Core\HLE\sceNetAdhoc.cpp">
       <Filter>HLE</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\sceNetAdhocMatching.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Core\HLE\sceNp.cpp">
       <Filter>HLE</Filter>
     </ClCompile>
@@ -552,6 +561,9 @@
     <ClCompile Include="..\..\Core\MIPS\MIPSVFPUUtils.cpp">
       <Filter>MIPS</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Core\MIPS\MIPSTracer.cpp">
+      <Filter>MIPS</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Core\Dialog\PSPDialog.cpp">
       <Filter>Dialog</Filter>
     </ClCompile>
@@ -638,9 +650,6 @@
     </ClCompile>
     <ClCompile Include="..\..\ext\xxhash.c">
       <Filter>Ext</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Core\MIPS\IR\IRAsm.cpp">
-      <Filter>MIPS\IR</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Core\MIPS\IR\IRCompALU.cpp">
       <Filter>MIPS\IR</Filter>
@@ -1192,6 +1201,34 @@
     <ClCompile Include="..\..\Core\Util\GameDB.cpp">
       <Filter>Util</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\sceSircs.cpp" />
+    <ClCompile Include="..\..\Core\Util\MemStick.cpp">
+      <Filter>Util</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\AtracCtx.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\AtracCtx2.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\Dialog\PSPOskConstants.cpp">
+      <Filter>Dialog</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\sceNetApctl.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\sceNetInet.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\sceNetResolver.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\NetInetConstants.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Core\HLE\SocketManager.cpp">
+      <Filter>HLE</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
@@ -1300,6 +1337,9 @@
       <Filter>HW</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Core\HW\SimpleAudioDec.h">
+      <Filter>HW</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HW\Atrac3Standalone.h">
       <Filter>HW</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Core\HW\StereoResampler.h">
@@ -1509,6 +1549,9 @@
     <ClInclude Include="..\..\Core\HLE\sceNetAdhoc.h">
       <Filter>HLE</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\sceNetAdhocMatching.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\Core\HLE\sceNp.h">
       <Filter>HLE</Filter>
     </ClInclude>
@@ -1606,6 +1649,9 @@
       <Filter>MIPS</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Core\MIPS\MIPSVFPUUtils.h">
+      <Filter>MIPS</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\MIPS\MIPSTracer.h">
       <Filter>MIPS</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Core\Dialog\PSPDialog.h">
@@ -1867,6 +1913,34 @@
     <ClInclude Include="..\..\Core\FrameTiming.h" />
     <ClInclude Include="..\..\Core\Util\GameDB.h">
       <Filter>Util</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\sceSircs.h" />
+    <ClInclude Include="..\..\Core\Util\MemStick.h">
+      <Filter>Util</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\AtracCtx.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\AtracCtx2.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\Dialog\PSPOskConstants.h">
+      <Filter>Dialog</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\sceNetApctl.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\sceNetInet.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\sceNetResolver.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\NetInetConstants.h">
+      <Filter>HLE</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Core\HLE\SocketManager.h">
+      <Filter>HLE</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

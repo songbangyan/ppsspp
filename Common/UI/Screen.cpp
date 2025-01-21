@@ -1,4 +1,5 @@
 #include "Common/System/Display.h"
+#include "Common/System/Request.h"
 #include "Common/Input/InputState.h"
 #include "Common/UI/Root.h"
 #include "Common/UI/Screen.h"
@@ -18,7 +19,22 @@ void Screen::focusChanged(ScreenFocusChange focusChange) {
 	case ScreenFocusChange::FOCUS_LOST_TOP: eventName = "FOCUS_LOST_TOP"; break;
 	case ScreenFocusChange::FOCUS_BECAME_TOP: eventName = "FOCUS_BECAME_TOP"; break;
 	}
-	DEBUG_LOG(SYSTEM, "Screen %s got %s", this->tag(), eventName);
+	DEBUG_LOG(Log::System, "Screen %s got %s", this->tag(), eventName);
+}
+
+int Screen::GetRequesterToken() {
+	if (token_ < 0) {
+		token_ = g_requestManager.GenerateRequesterToken();
+	}
+	return token_;
+}
+
+Screen::~Screen() {
+	screenManager_ = nullptr;
+	if (token_ >= 0) {
+		// To avoid expired callbacks getting called.
+		g_requestManager.ForgetRequestsWithToken(token_);
+	}
 }
 
 ScreenManager::~ScreenManager() {
@@ -29,7 +45,7 @@ void ScreenManager::switchScreen(Screen *screen) {
 	// TODO: inputLock_ ?
 
 	if (!nextStack_.empty() && screen == nextStack_.front().screen) {
-		ERROR_LOG(SYSTEM, "Already switching to this screen");
+		ERROR_LOG(Log::System, "Already switching to this screen");
 		return;
 	}
 	// Note that if a dialog is found, this will be a silent background switch that
@@ -37,15 +53,17 @@ void ScreenManager::switchScreen(Screen *screen) {
 	// until that switch.
 	// TODO: is this still true?
 	if (!nextStack_.empty()) {
-		ERROR_LOG(SYSTEM, "Already had a nextStack_! Asynchronous open while doing something? Deleting the new screen.");
+		ERROR_LOG(Log::System, "Already had a nextStack_! Asynchronous open while doing something? Deleting the new screen.");
 		delete screen;
 		return;
 	}
 	if (screen == nullptr) {
-		WARN_LOG(SYSTEM, "Switching to a zero screen, this can't be good");
+		WARN_LOG(Log::System, "Switching to a zero screen, this can't be good");
 	}
 	if (stack_.empty() || screen != stack_.back().screen) {
-		screen->setScreenManager(this);
+		if (screen) {
+			screen->setScreenManager(this);
+		}
 		nextStack_.push_back({ screen, 0 });
 	}
 }
@@ -61,7 +79,7 @@ void ScreenManager::update() {
 		overlayScreen_->update();
 	}
 	// The background screen doesn't need updating.
-	if (stack_.size()) {
+	if (!stack_.empty()) {
 		stack_.back().screen->update();
 	}
 }
@@ -69,7 +87,7 @@ void ScreenManager::update() {
 void ScreenManager::switchToNext() {
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
 	if (nextStack_.empty()) {
-		ERROR_LOG(SYSTEM, "switchToNext: No nextStack_!");
+		ERROR_LOG(Log::System, "switchToNext: No nextStack_!");
 	}
 
 	Layer temp = {nullptr, 0};
@@ -80,9 +98,7 @@ void ScreenManager::switchToNext() {
 	}
 	stack_.push_back(nextStack_.front());
 	nextStack_.front().screen->focusChanged(ScreenFocusChange::FOCUS_BECAME_TOP);
-	if (temp.screen) {
-		delete temp.screen;
-	}
+	delete temp.screen;
 	UI::SetFocusedView(nullptr);
 
 	// When will this ever happen? Should handle focus here too?
@@ -139,18 +155,19 @@ void ScreenManager::deviceLost() {
 		iter.screen->deviceLost();
 }
 
-void ScreenManager::deviceRestored() {
+void ScreenManager::deviceRestored(Draw::DrawContext *draw) {
+	draw_ = draw;
 	for (auto &iter : stack_)
-		iter.screen->deviceRestored();
+		iter.screen->deviceRestored(draw);
 }
 
 void ScreenManager::resized() {
-	INFO_LOG(SYSTEM, "ScreenManager::resized(dp: %dx%d)", g_display.dp_xres, g_display.dp_yres);
+	INFO_LOG(Log::System, "ScreenManager::resized(dp: %dx%d)", g_display.dp_xres, g_display.dp_yres);
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
 	// Have to notify the whole stack, otherwise there will be problems when going back
 	// to non-top screens.
-	for (auto iter = stack_.begin(); iter != stack_.end(); ++iter) {
-		iter->screen->resized();
+	for (auto &layer : stack_) {
+		layer.screen->resized();
 	}
 }
 
@@ -167,14 +184,16 @@ ScreenRenderFlags ScreenManager::render() {
 		// the EmuScreen or the actual global background screen.
 		auto iter = stack_.end();
 		Screen *coveringScreen = nullptr;
-		Screen *backgroundScreen = nullptr;
+		Screen *foundBackgroundScreen = nullptr;
 		bool first = true;
+
 		do {
 			--iter;
-			if (!backgroundScreen && iter->screen->canBeBackground(first)) {
+			ScreenRenderRole role = iter->screen->renderRole(first);
+			if (!foundBackgroundScreen && (role & ScreenRenderRole::CAN_BE_BACKGROUND)) {
 				// There still might be a screen that wants to be background - generally the EmuScreen if present.
 				layers.push_back(iter->screen);
-				backgroundScreen = iter->screen;
+				foundBackgroundScreen = iter->screen;
 			} else if (!coveringScreen) {
 				layers.push_back(iter->screen);
 			}
@@ -182,12 +201,14 @@ ScreenRenderFlags ScreenManager::render() {
 				coveringScreen = iter->screen;
 			}
 			first = false;
+			if (role & ScreenRenderRole::MUST_BE_FIRST) {
+				break;
+			}
 		} while (iter != stack_.begin());
 
-		// Confusing-looking expression, argh! Note the '_'
-		if (backgroundScreen_ && !backgroundScreen) {
+		if (backgroundScreen_ && !foundBackgroundScreen) {
 			layers.push_back(backgroundScreen_);
-			backgroundScreen = backgroundScreen_;
+			foundBackgroundScreen = backgroundScreen_;
 		}
 
 		// OK, now we iterate backwards over our little pile of collected screens.
@@ -219,7 +240,7 @@ ScreenRenderFlags ScreenManager::render() {
 			postRenderCb_(getUIContext(), postRenderUserdata_);
 		}
 	} else {
-		ERROR_LOG(SYSTEM, "No current screen!");
+		ERROR_LOG(Log::System, "No current screen!");
 	}
 
 	processFinishDialog();
@@ -314,24 +335,24 @@ void ScreenManager::pop() {
 			stack_.back().screen->focusChanged(ScreenFocusChange::FOCUS_LOST_TOP);
 		}
 	} else {
-		ERROR_LOG(SYSTEM, "Can't pop when stack empty");
+		ERROR_LOG(Log::System, "Can't pop when stack empty");
 	}
 }
 
 void ScreenManager::RecreateAllViews() {
 	std::lock_guard<std::recursive_mutex> guard(inputLock_);
-	for (auto it = stack_.begin(); it != stack_.end(); ++it) {
-		it->screen->RecreateViews();
+	for (auto &layer : stack_) {
+		layer.screen->RecreateViews();
 	}
 }
 
 void ScreenManager::finishDialog(Screen *dialog, DialogResult result) {
 	if (stack_.empty()) {
-		ERROR_LOG(SYSTEM, "Must be in a dialog to finishDialog");
+		ERROR_LOG(Log::System, "Must be in a dialog to finishDialog");
 		return;
 	}
 	if (dialog != stack_.back().screen) {
-		ERROR_LOG(SYSTEM, "Wrong dialog being finished!");
+		ERROR_LOG(Log::System, "Wrong dialog being finished!");
 		return;
 	}
 	dialog->onFinish(result);
@@ -370,10 +391,10 @@ void ScreenManager::processFinishDialog() {
 			}
 
 			if (!caller) {
-				ERROR_LOG(SYSTEM, "ERROR: no top screen when finishing dialog");
+				ERROR_LOG(Log::System, "ERROR: no top screen when finishing dialog");
 			} else if (caller != topScreen()) {
 				// The caller may get confused if we call dialogFinished() now.
-				WARN_LOG(SYSTEM, "Skipping non-top dialog when finishing dialog.");
+				WARN_LOG(Log::System, "Skipping non-top dialog when finishing dialog.");
 			} else {
 				caller->dialogFinished(dialogFinished_, dialogResult_);
 			}
@@ -384,15 +405,11 @@ void ScreenManager::processFinishDialog() {
 }
 
 void ScreenManager::SetBackgroundOverlayScreens(Screen *backgroundScreen, Screen *overlayScreen) {
-	if (backgroundScreen_) {
-		delete backgroundScreen_;
-	}
+	delete backgroundScreen_;
 	backgroundScreen_ = backgroundScreen;
 	backgroundScreen_->setScreenManager(this);
 
-	if (overlayScreen_) {
-		delete overlayScreen_;
-	}
+	delete overlayScreen_;
 	overlayScreen_ = overlayScreen;
 	overlayScreen_->setScreenManager(this);
 }

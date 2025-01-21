@@ -19,7 +19,7 @@
 
 #include <cstdint>
 
-enum GECommand {
+enum GECommand : uint8_t {
 	GE_CMD_NOP = 0,
 	GE_CMD_VADDR = 0x1,
 	GE_CMD_IADDR = 0x2,
@@ -621,6 +621,11 @@ enum GEPatchPrimType
 	GE_PATCHPRIM_POINTS = 2,
 	// Treated as points.
 	GE_PATCHPRIM_UNKNOWN = 3,
+};
+
+enum GECullMode {
+	GE_CULL_CW = 0,
+	GE_CULL_CCW = 1,
 };
 
 inline GEPrimitiveType PatchPrimToPrim(GEPatchPrimType type) {

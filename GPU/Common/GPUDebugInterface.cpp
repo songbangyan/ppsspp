@@ -20,7 +20,7 @@
 #include "Common/StringUtils.h"
 #include "Core/Debugger/SymbolMap.h"
 #include "GPU/Common/GPUDebugInterface.h"
-#include "GPU/Debugger/Debugger.h"
+#include "GPU/GPUCommon.h"
 #include "GPU/Debugger/GECommandTable.h"
 #include "GPU/GPUState.h"
 
@@ -521,8 +521,8 @@ public:
 
 private:
 	bool parseFieldReference(const char *ref, const char *field, uint32_t &referenceIndex);
-	uint32_t getFieldValue(GECmdFormat fmt, GECmdField field, uint32_t value);
-	ExpressionType getFieldType(GECmdFormat fmt, GECmdField field);
+	static uint32_t getFieldValue(GECmdFormat fmt, GECmdField field, uint32_t value);
+	static ExpressionType getFieldType(GECmdFormat fmt, GECmdField field);
 
 	GPUDebugInterface *gpu_;
 };
@@ -532,7 +532,7 @@ bool GEExpressionFunctions::parseReference(char *str, uint32_t &referenceIndex) 
 	// For now, let's just support the register bits directly.
 	GECmdInfo info;
 	if (GECmdInfoByName(str, info)) {
-		referenceIndex = info.reg;
+		referenceIndex = info.cmd;
 		return true;
 	}
 
@@ -598,8 +598,8 @@ bool GEExpressionFunctions::parseFieldReference(const char *ref, const char *fie
 	}
 
 	for (const auto &entry : fieldNames) {
-		if (entry.fmt == info.fmt && strcasecmp(field, entry.name) == 0) {
-			referenceIndex = (info.reg << 12) | (uint32_t)entry.field;
+		if (entry.fmt == info.cmdFmt && strcasecmp(field, entry.name) == 0) {
+			referenceIndex = (info.cmd << 12) | (uint32_t)entry.field;
 			return true;
 		}
 	}
@@ -623,7 +623,7 @@ bool GEExpressionFunctions::parseSymbol(char *str, uint32_t &symbolValue) {
 uint32_t GEExpressionFunctions::getReferenceValue(uint32_t referenceIndex) {
 	GPUgstate state = gpu_->GetGState();
 	if (referenceIndex < 0x100) {
-		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex)).fmt;
+		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex)).cmdFmt;
 		uint32_t value = state.cmdmem[referenceIndex];
 		if (fmt == GECmdFormat::FLOAT)
 			return value << 8;
@@ -632,7 +632,7 @@ uint32_t GEExpressionFunctions::getReferenceValue(uint32_t referenceIndex) {
 
 	if (referenceIndex >= (uint32_t)GEReferenceIndex::FIELD_START && referenceIndex <= (uint32_t)GEReferenceIndex::FIELD_END) {
 		uint32_t value = state.cmdmem[referenceIndex >> 12] & 0x00FFFFFF;
-		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex >> 12)).fmt;
+		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex >> 12)).cmdFmt;
 		return getFieldValue(fmt, GECmdField(referenceIndex & 0xFF), value);
 	}
 
@@ -702,10 +702,10 @@ uint32_t GEExpressionFunctions::getReferenceValue(uint32_t referenceIndex) {
 		return state.getTransferDstAddress();
 
 	case GEReferenceIndex::PRIMCOUNT:
-		return GPUDebug::PrimsThisFrame();
+		return gpu_->PrimsThisFrame();
 
 	case GEReferenceIndex::LASTPRIMCOUNT:
-		return GPUDebug::PrimsLastFrame();
+		return gpu_->PrimsLastFrame();
 
 	case GEReferenceIndex::TEXADDR0:
 	case GEReferenceIndex::TEXADDR1:
@@ -770,7 +770,7 @@ uint32_t GEExpressionFunctions::getFieldValue(GECmdFormat fmt, GECmdField field,
 	case GECmdField::FLAG_AFTER_8:
 		return (value >> 8) & 1;
 	case GECmdField::FLAG_AFTER_9:
-		return (value >> 8) & 1;
+		return (value >> 9) & 1;
 	case GECmdField::FLAG_AFTER_10:
 		return (value >> 10) & 1;
 	case GECmdField::FLAG_AFTER_11:
@@ -897,14 +897,14 @@ uint32_t GEExpressionFunctions::getFieldValue(GECmdFormat fmt, GECmdField field,
 
 ExpressionType GEExpressionFunctions::getReferenceType(uint32_t referenceIndex) {
 	if (referenceIndex < 0x100) {
-		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex)).fmt;
+		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex)).cmdFmt;
 		if (fmt == GECmdFormat::FLOAT)
 			return EXPR_TYPE_FLOAT;
 		return EXPR_TYPE_UINT;
 	}
 
 	if (referenceIndex >= (uint32_t)GEReferenceIndex::FIELD_START && referenceIndex <= (uint32_t)GEReferenceIndex::FIELD_END) {
-		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex >> 12)).fmt;
+		GECmdFormat fmt = GECmdInfoByCmd(GECommand(referenceIndex >> 12)).cmdFmt;
 		return getFieldType(fmt, GECmdField(referenceIndex & 0xFF));
 	}
 
